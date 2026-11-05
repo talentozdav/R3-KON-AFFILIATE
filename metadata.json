@@ -1,0 +1,6 @@
+{
+  "name": "R3 Global Affiliate Network",
+  "description": "A discreet international affiliate membership platform for qualified individuals, wealth advisors, and corporate partners introducing clients to R3 Contingencies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
