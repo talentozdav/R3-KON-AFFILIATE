@@ -330,8 +330,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
         {/* Top Bar */}
         <div className="p-6 bg-[#0A192F] text-[#FAF9F6] border-b border-[#1A2E4C] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-[#FAF9F6] text-[#0A192F] flex items-center justify-center font-serif font-bold text-base">
-              R3
+            <div className="w-10 h-10 bg-black border border-stone-800 rounded-xs flex items-center justify-center p-1 shrink-0 shadow-xs">
+              <img
+                src="/logo-emblem.png"
+                alt="R3 Contingencies"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = '/favicon.svg';
+                }}
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">

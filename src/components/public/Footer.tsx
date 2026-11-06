@@ -1,4 +1,5 @@
 import React from 'react';
+import { BrandLogo } from '../common/BrandLogo';
 
 interface FooterProps {
   onOpenTerms: () => void;
@@ -19,13 +20,8 @@ export const Footer: React.FC<FooterProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-12 gap-12 pb-14 border-b border-[#1A2E4C]">
           {/* Brand Info */}
           <div className="md:col-span-5 flex flex-col items-start">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-7 h-7 bg-[#FAF9F6] text-[#0A192F] flex items-center justify-center font-serif font-bold text-sm">
-                R3
-              </div>
-              <span className="font-serif font-semibold text-lg tracking-wider uppercase text-white">
-                R3 Contingencies
-              </span>
+            <div className="mb-4">
+              <BrandLogo variant="dark" size="md" />
             </div>
             <p className="text-xs text-stone-400 font-light leading-relaxed max-w-sm mb-6">
               International contingency coordination, crisis resolution, and executive advisory frameworks. The R3 Global Affiliate Network is restricted to verified professional partners.
@@ -115,8 +111,13 @@ export const Footer: React.FC<FooterProps> = ({
                 <span className="text-[#D4AF37] font-mono text-[11px]">→</span>
               </button>
             </div>
-            <div className="mt-4 text-[11px] text-stone-500 leading-normal font-light">
-              Executive coordination inquiries: <span className="font-mono text-stone-400">counsel@r3contingencies.com</span>
+            <div className="mt-4 text-[11px] text-stone-400 leading-relaxed font-light space-y-1">
+              <div>
+                Executive coordination: <a href="mailto:services@r3-konaffiliate.online" className="font-mono text-stone-300 hover:text-[#D4AF37] transition-colors underline underline-offset-2">services@r3-konaffiliate.online</a>
+              </div>
+              <div>
+                Direct telephone inquiry: <a href="tel:+19313660615" className="font-mono text-stone-300 hover:text-[#D4AF37] transition-colors">+1(931)366-0615</a>
+              </div>
             </div>
           </div>
         </div>

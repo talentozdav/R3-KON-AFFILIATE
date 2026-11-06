@@ -310,7 +310,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   type="text"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="e.g. Lord Alexander Vance"
+                  placeholder="e.g. Eleanor Vance"
                   className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.fullName && (

@@ -14,30 +14,35 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
-  const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
-  const isProduction = process.env.NODE_ENV === 'production';
+export const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+const isVercel = Boolean(process.env.VERCEL);
 
-  app.use(express.json());
-  app.use(authMiddleware);
+app.use(express.json());
+app.use(express.static(path.resolve(__dirname, 'public')));
+app.use(authMiddleware);
 
-  // Health check
-  app.get('/api/health', (_req, res) => {
-    res.json({
-      status: 'operational',
-      network: 'R3 Global Affiliate Network',
-      timestamp: new Date().toISOString()
-    });
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'operational',
+    network: 'R3 Global Affiliate Network',
+    environment: isProduction ? 'production' : 'development',
+    serverless: isVercel,
+    timestamp: new Date().toISOString()
   });
+});
 
-  // API Routes
-  app.use('/api/auth', authRouter);
-  app.use('/api/applications', applicationsRouter);
-  app.use('/api/affiliates', affiliatesRouter);
-  app.use('/api/admin', adminRouter);
-  app.use('/api/referrals', referralsRouter);
+// API Routes
+app.use('/api/auth', authRouter);
+app.use('/api/applications', applicationsRouter);
+app.use('/api/affiliates', affiliatesRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/referrals', referralsRouter);
 
+// Local / Standalone Server initialization
+async function setupViteAndListen() {
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -53,12 +58,20 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[R3 Network] Server running on http://0.0.0.0:${PORT}`);
+  // Only bind port when running as a standalone server, not under Vercel serverless functions
+  if (!isVercel) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`[R3 Network] Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
+}
+
+// In non-Vercel environments, run setup
+if (!isVercel) {
+  setupViteAndListen().catch((err) => {
+    console.error('[R3 Network] Failed to initialize server:', err);
+    process.exit(1);
   });
 }
 
-startServer().catch((err) => {
-  console.error('[R3 Network] Failed to initialize server:', err);
-  process.exit(1);
-});
+export default app;

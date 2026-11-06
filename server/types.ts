@@ -7,6 +7,11 @@ export interface User {
   role: UserRole;
   affiliateId?: string; // links to Affiliate if role === 'affiliate'
   status: 'active' | 'suspended' | 'pending_activation';
+  passwordHash?: string;
+  passwordSalt?: string;
+  activationToken?: string;
+  resetToken?: string;
+  resetTokenExpires?: string;
   createdAt: string;
 }
 

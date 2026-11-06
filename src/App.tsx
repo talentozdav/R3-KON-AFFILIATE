@@ -19,7 +19,6 @@ import { LegalModal } from './components/public/LegalModals';
 import { ClientInquiryModal } from './components/public/ClientInquiryModal';
 import { AffiliatePortal } from './components/portal/AffiliatePortal';
 import { AdminPortal } from './components/admin/AdminPortal';
-import { PersonaSwitcher } from './components/common/PersonaSwitcher';
 import { api } from './lib/api';
 
 function AppContent() {
@@ -152,8 +151,7 @@ function AppContent() {
         )
       )}
 
-      {/* Floating Persona Switcher for Quick Role Testing */}
-      <PersonaSwitcher onOpenPortal={() => setIsPortalOpen(true)} />
+      {/* Modals and portal render clean with no demo switchers */}
     </div>
   );
 }

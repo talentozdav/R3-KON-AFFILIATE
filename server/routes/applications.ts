@@ -4,8 +4,27 @@ import { AffiliateApplication } from '../types.js';
 
 export const applicationsRouter = Router();
 
+const appSubmissionAttempts: Map<string, { count: number; firstAttempt: number }> = new Map();
+const APP_WINDOW = 60 * 60 * 1000; // 1 hour
+const MAX_APP_SUBMISSIONS = 5;
+
 // Submit new affiliate application
 applicationsRouter.post('/', (req: Request, res: Response) => {
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const nowMs = Date.now();
+  const rec = appSubmissionAttempts.get(ip);
+  if (!rec || nowMs - rec.firstAttempt > APP_WINDOW) {
+    appSubmissionAttempts.set(ip, { count: 1, firstAttempt: nowMs });
+  } else {
+    rec.count += 1;
+    if (rec.count > MAX_APP_SUBMISSIONS) {
+      return res.status(429).json({
+        error: 'Too Many Requests',
+        message: 'Submission limit reached. Please wait before submitting another candidacy dossier.'
+      });
+    }
+  }
+
   const {
     fullName,
     applicantType,

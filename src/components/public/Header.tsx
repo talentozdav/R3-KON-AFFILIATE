@@ -1,6 +1,7 @@
 import React from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Shield, ArrowUpRight, UserCheck } from 'lucide-react';
+import { BrandLogo } from '../common/BrandLogo';
 
 interface HeaderProps {
   onOpenLogin: () => void;
@@ -29,19 +30,9 @@ export const Header: React.FC<HeaderProps> = ({
       )}
 
       <div className="max-w-7xl mx-auto px-6 lg:px-12 h-20 flex items-center justify-between gap-8">
-        {/* Zone 1: Brand Wordmark (Single text element) */}
-        <a href="#overview" className="flex items-center gap-3 shrink-0 group">
-          <div className="w-8 h-8 bg-[#0A192F] text-[#D4AF37] flex items-center justify-center border border-[#1A2E4C] transition-colors group-hover:border-[#D4AF37]">
-            <span className="font-serif font-bold text-base tracking-tighter">R3</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="font-serif font-semibold text-lg tracking-wider text-[#0A192F] uppercase">
-              R3 Contingencies
-            </span>
-            <span className="text-[10px] tracking-[0.2em] uppercase text-stone-500 font-sans -mt-0.5">
-              Global Affiliate Network
-            </span>
-          </div>
+        {/* Zone 1: Brand Wordmark with new R3 Contingencies insignia */}
+        <a href="#overview" className="flex items-center shrink-0 group">
+          <BrandLogo variant="light" size="md" />
         </a>
 
         {/* Zone 2: Navigation Links (4-5 single-line clean text links) */}

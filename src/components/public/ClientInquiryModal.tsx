@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../../lib/api';
 import { X, CheckCircle2, Shield, ArrowRight } from 'lucide-react';
+import { BrandLogo } from '../common/BrandLogo';
 
 interface ClientInquiryModalProps {
   isOpen: boolean;
@@ -102,6 +103,9 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
         ) : (
           <div>
             <div className="mb-6">
+              <div className="mb-3">
+                <BrandLogo variant="light" size="sm" showSubtitle={false} />
+              </div>
               <span className="text-[10px] uppercase tracking-widest text-[#D4AF37] font-semibold block mb-1">
                 Executive Intake Gateway
               </span>

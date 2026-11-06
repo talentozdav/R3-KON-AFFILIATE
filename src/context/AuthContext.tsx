@@ -6,7 +6,8 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string) => Promise<void>;
+  login: (email: string, password?: string) => Promise<void>;
+  activateAccount: (email: string, referenceNumber: string, password: string) => Promise<string>;
   logout: () => Promise<void>;
   switchPersona: (email: string) => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -45,11 +46,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshUser();
   }, []);
 
-  const login = async (email: string) => {
+  const login = async (email: string, password?: string) => {
     setIsLoading(true);
     try {
-      const res = await api.login(email);
+      const res = await api.login(email, password);
       setUser(res.user);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const activateAccount = async (email: string, referenceNumber: string, password: string) => {
+    setIsLoading(true);
+    try {
+      const res = await api.activateAccount(email, referenceNumber, password);
+      setUser(res.user);
+      return res.message;
     } finally {
       setIsLoading(false);
     }
@@ -77,6 +89,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAuthenticated: Boolean(user),
         isLoading,
         login,
+        activateAccount,
         logout,
         switchPersona,
         refreshUser

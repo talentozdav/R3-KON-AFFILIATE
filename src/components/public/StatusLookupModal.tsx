@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api } from '../../lib/api';
 import { AffiliateApplication } from '../../types';
 import { X, Search, CheckCircle2, Clock, AlertTriangle, XCircle, HelpCircle } from 'lucide-react';
+import { BrandLogo } from '../common/BrandLogo';
 
 interface StatusLookupModalProps {
   isOpen: boolean;
@@ -91,6 +92,9 @@ export const StatusLookupModal: React.FC<StatusLookupModalProps> = ({
         </button>
 
         <div className="mb-6">
+          <div className="mb-3">
+            <BrandLogo variant="light" size="sm" showSubtitle={false} />
+          </div>
           <span className="text-[10px] uppercase tracking-widest text-[#D4AF37] font-semibold block mb-1">
             Registry Verification
           </span>

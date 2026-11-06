@@ -60,13 +60,36 @@ export const api = {
     return request('/api/auth/me');
   },
 
-  async login(email: string): Promise<{ success: boolean; token: string; user: User }> {
+  async login(email: string, password?: string): Promise<{ success: boolean; token: string; user: User }> {
     const res = await request<{ success: boolean; token: string; user: User }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email })
+      body: JSON.stringify({ email, password })
     });
     setAuthToken(res.token);
     return res;
+  },
+
+  async activateAccount(email: string, referenceNumber: string, password: string): Promise<{ success: boolean; token: string; user: User; message: string }> {
+    const res = await request<{ success: boolean; token: string; user: User; message: string }>('/api/auth/activate', {
+      method: 'POST',
+      body: JSON.stringify({ email, referenceNumber, password })
+    });
+    setAuthToken(res.token);
+    return res;
+  },
+
+  async forgotPassword(email: string): Promise<{ success: boolean; message: string }> {
+    return request('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
+  },
+
+  async resetPassword(token: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+    return request('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, newPassword })
+    });
   },
 
   async switchPersona(email: string): Promise<{ success: boolean; token: string; user: User }> {
@@ -79,6 +102,11 @@ export const api = {
   },
 
   async logout(): Promise<void> {
+    try {
+      await request('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore network errors on logout
+    }
     setAuthToken(null);
   },
 

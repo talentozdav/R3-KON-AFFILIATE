@@ -103,8 +103,15 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
         {/* Top Header */}
         <div className="p-6 bg-[#0A192F] text-[#FAF9F6] border-b border-[#1A2E4C] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-[#FAF9F6] text-[#0A192F] flex items-center justify-center font-serif font-bold text-base">
-              R3
+            <div className="w-10 h-10 bg-black border border-stone-800 rounded-xs flex items-center justify-center p-1 shrink-0 shadow-xs">
+              <img
+                src="/logo-emblem.png"
+                alt="R3 Contingencies"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = '/favicon.svg';
+                }}
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -291,7 +298,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                       </div>
 
                       {data.leads.length === 0 ? (
-                        <p className="text-xs text-stone-500 py-4 font-light">No active leads logged yet.</p>
+                        <p className="text-xs text-stone-500 py-4 font-light">No referrals yet.</p>
                       ) : (
                         <div className="space-y-3">
                           {data.leads.slice(0, 4).map((lead) => (
@@ -322,7 +329,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                       </div>
 
                       {data.commissions.length === 0 ? (
-                        <p className="text-xs text-stone-500 py-4 font-light">No verified commissions recorded yet.</p>
+                        <p className="text-xs text-stone-500 py-4 font-light">No commissions recorded yet.</p>
                       ) : (
                         <div className="space-y-3">
                           {data.commissions.slice(0, 4).map((com) => (
@@ -463,7 +470,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                         {data.leads.length === 0 ? (
                           <tr>
                             <td colSpan={6} className="py-8 text-center text-stone-500 font-light">
-                              No client leads attributed yet. Share your referral link or use the Register Lead form.
+                              No referrals yet. Share your referral link or use the Register Lead form to introduce clients.
                             </td>
                           </tr>
                         ) : (
@@ -531,7 +538,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                         {data.conversions.length === 0 ? (
                           <tr>
                             <td colSpan={6} className="py-8 text-center text-stone-500 font-light">
-                              No conversion records currently logged.
+                              No verified conversions yet. Verified conversions are recorded after contract signing and banking clearance.
                             </td>
                           </tr>
                         ) : (
@@ -597,7 +604,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                         {data.commissions.length === 0 ? (
                           <tr>
                             <td colSpan={7} className="py-8 text-center text-stone-500 font-light">
-                              No commission entries logged in ledger.
+                              No commissions recorded yet.
                             </td>
                           </tr>
                         ) : (
@@ -668,7 +675,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                         {data.payouts.length === 0 ? (
                           <tr>
                             <td colSpan={7} className="py-8 text-center text-stone-500 font-light">
-                              No completed payout cycles logged yet.
+                              No payouts recorded yet.
                             </td>
                           </tr>
                         ) : (

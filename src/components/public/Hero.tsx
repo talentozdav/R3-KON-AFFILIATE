@@ -67,10 +67,13 @@ export const Hero: React.FC<HeroProps> = ({ onApplyClick, onLoginClick }) => {
             <div className="relative border border-[#E2DDD3] bg-white p-2 shadow-sm">
               <div className="relative aspect-[4/3] sm:aspect-[16/11] overflow-hidden bg-stone-900">
                 <img
-                  src="/src/assets/images/hero_executive_suite_1793913449800.jpg"
+                  src="/images/hero_executive_suite.jpg"
                   alt="R3 Contingencies Executive Advisory Suite"
                   className="w-full h-full object-cover object-center filter brightness-[0.92] contrast-[1.05]"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = '/src/assets/images/hero_executive_suite_1793913449800.jpg';
+                  }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#0A192F]/80 via-transparent to-transparent pointer-events-none" />
 
@@ -82,10 +85,10 @@ export const Hero: React.FC<HeroProps> = ({ onApplyClick, onLoginClick }) => {
               </div>
             </div>
 
-            {/* Subdued architectural quote card below */}
+            {/* Subdued architectural statement card below */}
             <div className="mt-4 p-5 bg-[#FAF9F6] border border-[#E2DDD3] text-xs text-stone-600 leading-relaxed">
               <span className="text-[#D4AF37] font-serif text-lg leading-none mr-1.5">“</span>
-              Our affiliate partners represent the highest echelon of private banking, legal fiduciary, and executive advisory practices globally.
+              R3 Contingencies provides international contingency coordination, executive crisis resolution, and advisory frameworks for accredited private and corporate partners.
             </div>
           </div>
         </div>

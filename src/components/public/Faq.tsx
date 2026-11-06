@@ -35,7 +35,7 @@ export const Faq: React.FC = () => {
     },
     {
       q: 'How can an affiliate contact partner support?',
-      a: 'Active affiliates have direct email and priority telephone access to their assigned R3 Affiliate Manager, as well as an integrated lead submission gateway within their private dashboard.'
+      a: 'Active affiliates and applicants can reach the R3 Partner Secretariat directly at services@r3-konaffiliate.online or by phone at +1(931)366-0615. Active partners also enjoy an integrated direct lead submission gateway and dedicated affiliate liaison in their private dashboard.'
     }
   ];
 

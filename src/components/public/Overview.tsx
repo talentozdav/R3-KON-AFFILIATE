@@ -26,14 +26,17 @@ export const Overview: React.FC = () => {
             <div className="border border-[#E2DDD3] bg-white p-2">
               <div className="relative aspect-[4/3] overflow-hidden bg-stone-900">
                 <img
-                  src="/src/assets/images/partner_network_pavilion_1793913449334.jpg"
+                  src="/images/partner_network_pavilion.jpg"
                   alt="R3 International Network Pavilion"
                   className="w-full h-full object-cover object-center filter brightness-[0.95]"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = '/src/assets/images/partner_network_pavilion_1793913449334.jpg';
+                  }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#0A192F]/60 via-transparent to-transparent pointer-events-none" />
                 <div className="absolute bottom-3 left-3 text-white text-[11px] font-sans tracking-wide">
-                  <span>Geneva & London Operations</span>
+                  <span>International Contingency Coordination</span>
                 </div>
               </div>
             </div>
@@ -44,7 +47,7 @@ export const Overview: React.FC = () => {
                 To maintain regulatory alignment across jurisdictions, all applications undergo thorough KYC and reputational due diligence. R3 maintains zero tolerance for spam, misleading marketing, or mass consumer solicitation.
               </p>
               <div className="text-[11px] text-stone-500 uppercase tracking-wider font-mono">
-                Jurisdictions: UK · EU · CH · SG · UAE · US
+                Multi-Jurisdictional Cross-Border Compliance
               </div>
             </div>
           </div>
