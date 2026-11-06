@@ -18,6 +18,7 @@ import { StatusLookupModal } from './components/public/StatusLookupModal';
 import { LegalModal } from './components/public/LegalModals';
 import { ClientInquiryModal } from './components/public/ClientInquiryModal';
 import { AffiliatePortal } from './components/portal/AffiliatePortal';
+import { ClientPortal } from './components/portal/ClientPortal';
 import { AdminPortal } from './components/admin/AdminPortal';
 import { api } from './lib/api';
 
@@ -51,7 +52,19 @@ function AppContent() {
           console.warn('[R3 Referral] Referral code invalid or inactive:', err.message);
         });
     }
-  }, []);
+
+    // Direct /client-portal route or activation link handling
+    const isClientPortalPath = window.location.pathname === '/client-portal';
+    const isActivation = params.get('mode') === 'activate' || params.get('action') === 'activate';
+
+    if (isActivation || isClientPortalPath) {
+      if (isAuthenticated) {
+        setIsPortalOpen(true);
+      } else {
+        setIsLoginOpen(true);
+      }
+    }
+  }, [isAuthenticated]);
 
   const handleOpenPortal = () => {
     setIsPortalOpen(true);
@@ -146,6 +159,8 @@ function AppContent() {
       {isPortalOpen && isAuthenticated && user && (
         user.role === 'affiliate' ? (
           <AffiliatePortal onClose={() => setIsPortalOpen(false)} />
+        ) : user.role === 'client' ? (
+          <ClientPortal onClose={() => setIsPortalOpen(false)} />
         ) : (
           <AdminPortal onClose={() => setIsPortalOpen(false)} />
         )

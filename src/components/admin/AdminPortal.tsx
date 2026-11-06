@@ -12,7 +12,10 @@ import {
   Payout,
   AuditLogEntry,
   ApplicationStatus,
-  AffiliateStatus
+  AffiliateStatus,
+  ClientRegistration,
+  ClientNote,
+  ClientFollowup
 } from '../../types';
 import {
   ShieldAlert,
@@ -33,7 +36,12 @@ import {
   AlertTriangle,
   Plus,
   Send,
-  Eye
+  Eye,
+  MessageSquare,
+  Calendar,
+  MailCheck,
+  Building,
+  UserCheck
 } from 'lucide-react';
 
 interface AdminPortalProps {
@@ -42,7 +50,7 @@ interface AdminPortalProps {
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'affiliates' | 'conversions' | 'commissions' | 'rules' | 'payouts' | 'audit'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'affiliates' | 'conversions' | 'commissions' | 'rules' | 'payouts' | 'audit' | 'client_crm'>('overview');
   const [isLoading, setIsLoading] = useState(false);
   const [metrics, setMetrics] = useState<AdminOverviewMetrics | null>(null);
 
@@ -56,12 +64,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const [rules, setRules] = useState<CommissionRule[]>([]);
   const [payouts, setPayouts] = useState<Payout[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [clientRegistrations, setClientRegistrations] = useState<ClientRegistration[]>([]);
 
   // Modals & Action States
   const [selectedApp, setSelectedApp] = useState<AffiliateApplication | null>(null);
   const [appReviewNotes, setAppReviewNotes] = useState('');
   const [activationCode, setActivationCode] = useState('');
   const [activationRate, setActivationRate] = useState(10.0);
+
+  // Client CRM Modal & Action States
+  const [selectedClientForNotes, setSelectedClientForNotes] = useState<ClientRegistration | null>(null);
+  const [clientNotes, setClientNotes] = useState<ClientNote[]>([]);
+  const [clientFollowups, setClientFollowups] = useState<ClientFollowup[]>([]);
+  const [newNoteContent, setNewNoteContent] = useState('');
+  const [newFollowupDueDate, setNewFollowupDueDate] = useState('');
+  const [newFollowupNotes, setNewFollowupNotes] = useState('');
+  const [isResendingInvite, setIsResendingInvite] = useState<string | null>(null);
 
   // New Conversion Modal state
   const [showNewConversionModal, setShowNewConversionModal] = useState(false);
@@ -106,7 +124,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const fetchAllData = async () => {
     setIsLoading(true);
     try {
-      const [m, apps, affs, refs, convs, comms, rls, pays, logs] = await Promise.all([
+      const [m, apps, affs, refs, convs, comms, rls, pays, logs, clients] = await Promise.all([
         api.getAdminOverview(),
         api.getAdminApplications(),
         api.getAdminAffiliates(),
@@ -115,7 +133,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
         api.getAdminCommissions(),
         api.getAdminCommissionRules(),
         api.getAdminPayouts(),
-        api.getAdminAuditLogs()
+        api.getAdminAuditLogs(),
+        api.getAdminClientRegistrations()
       ]);
 
       setMetrics(m.metrics);
@@ -128,6 +147,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
       setRules(rls.rules);
       setPayouts(pays.payouts);
       setAuditLogs(logs.auditLogs);
+      setClientRegistrations(clients.registrations || []);
     } catch (err: any) {
       console.error('Failed to load admin data:', err);
     } finally {
@@ -319,6 +339,76 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
     }
   };
 
+  // 12. Client CRM Handlers
+  const handleOpenClientNotes = async (client: ClientRegistration) => {
+    setSelectedClientForNotes(client);
+    try {
+      const [notesRes, followupsRes] = await Promise.all([
+        api.getAdminClientNotes(client.id),
+        api.getAdminClientFollowups(client.id)
+      ]);
+      setClientNotes(notesRes.notes || []);
+      setClientFollowups(followupsRes.followups || []);
+    } catch (err: any) {
+      console.error('Error fetching client CRM notes:', err);
+    }
+  };
+
+  const handleAddClientNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedClientForNotes || !newNoteContent.trim()) return;
+    try {
+      const res = await api.addAdminClientNote({
+        registrationId: selectedClientForNotes.id,
+        content: newNoteContent.trim()
+      });
+      setClientNotes((prev) => [res.note, ...prev]);
+      setNewNoteContent('');
+    } catch (err: any) {
+      alert(err.message || 'Failed to record note');
+    }
+  };
+
+  const handleAddClientFollowup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedClientForNotes || !newFollowupDueDate) return;
+    try {
+      const res = await api.addAdminClientFollowup({
+        registrationId: selectedClientForNotes.id,
+        title: 'Fiduciary Review',
+        dueDate: newFollowupDueDate,
+        notes: newFollowupNotes.trim()
+      });
+      setClientFollowups((prev) => [...prev, res.followup]);
+      setNewFollowupDueDate('');
+      setNewFollowupNotes('');
+    } catch (err: any) {
+      alert(err.message || 'Failed to schedule followup');
+    }
+  };
+
+  const handleResendClientInvite = async (clientId: string) => {
+    setIsResendingInvite(clientId);
+    try {
+      const res = await api.resendAdminClientInvitation(clientId);
+      alert(res.message || 'Invitation email dispatched successfully via Resend.');
+      fetchAllData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to resend invitation');
+    } finally {
+      setIsResendingInvite(null);
+    }
+  };
+
+  const handleUpdateClientStatus = async (clientId: string, newStatus: any) => {
+    try {
+      await api.updateAdminClientRegistrationStatus(clientId, newStatus);
+      fetchAllData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update status');
+    }
+  };
+
   const filteredApplications = applications.filter((app) => {
     if (appStatusFilter === 'ALL') return true;
     return app.status === appStatusFilter;
@@ -390,6 +480,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
             { id: 'overview', label: 'Program Overview' },
             { id: 'applications', label: `Applications (${metrics?.pendingApplications ?? 0} Pending)` },
             { id: 'affiliates', label: `Affiliates Directory (${affiliates.length})` },
+            { id: 'client_crm', label: `Client CRM (${clientRegistrations.length})` },
             { id: 'conversions', label: `Conversions (${conversions.length})` },
             { id: 'commissions', label: `Commission Ledger (${commissions.length})` },
             { id: 'rules', label: `Commission Rules (${rules.length})` },
@@ -1101,6 +1192,148 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
               </div>
             </div>
           )}
+
+          {/* TAB 9: CLIENT CRM */}
+          {activeTab === 'client_crm' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="font-serif text-2xl text-[#0A192F] font-normal">Institutional Client CRM & Retainers</h3>
+                  <p className="text-xs text-stone-600 font-light">
+                    Direct corporate registrants, fiduciary account activation status, Resend invitations, and confidential advisory briefs.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-mono">
+                    Active Clients: {clientRegistrations.filter(c => c.status === 'APPROVED').length}
+                  </div>
+                  <div className="px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-mono">
+                    Pending Invites: {clientRegistrations.filter(c => c.status === 'PENDING').length}
+                  </div>
+                </div>
+              </div>
+
+              {/* Table of Client Registrations */}
+              <div className="bg-white border border-[#E2DDD3] overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-stone-50 border-b border-[#E2DDD3] text-[10px] uppercase font-medium text-stone-600 tracking-wider">
+                    <tr>
+                      <th className="py-3.5 px-4">Client Dossier</th>
+                      <th className="py-3.5 px-4">Contact Coordinates</th>
+                      <th className="py-3.5 px-4">Jurisdiction</th>
+                      <th className="py-3.5 px-4">Tier / Category</th>
+                      <th className="py-3.5 px-4">Status & Invitation</th>
+                      <th className="py-3.5 px-4 text-right">Fiduciary Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {clientRegistrations.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-12 text-center text-stone-500 font-light">
+                          No client registrations recorded. Submissions through the portal or inquiry modal persist directly here in real time.
+                        </td>
+                      </tr>
+                    ) : (
+                      clientRegistrations.map((client) => (
+                        <tr key={client.id} className="hover:bg-stone-50/70 transition-colors">
+                          <td className="py-3.5 px-4">
+                            <div className="font-medium text-[#0A192F] text-sm">{client.fullName}</div>
+                            {client.company && (
+                              <div className="text-stone-500 text-[11px] font-light flex items-center gap-1">
+                                <Building className="w-3 h-3 text-stone-400" />
+                                <span>{client.company}</span>
+                              </div>
+                            )}
+                            <div className="font-mono text-[10px] text-stone-400 mt-0.5">
+                              {client.referenceNumber} · {new Date(client.createdAt).toLocaleDateString()}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-xs">
+                            <div className="text-stone-800">{client.email}</div>
+                            <div className="text-stone-400 text-[11px] font-sans">{client.phone}</div>
+                          </td>
+                          <td className="py-3.5 px-4 font-light text-stone-700">
+                            {client.country || 'International'}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className="inline-block px-2 py-0.5 bg-stone-100 border border-stone-200 text-stone-800 text-[11px]">
+                              {client.serviceCategory || 'Executive Contingency'}
+                            </span>
+                            {client.requirementsBrief && (
+                              <div className="text-[10px] text-stone-400 mt-1 line-clamp-1">
+                                {client.requirementsBrief}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <div className="flex flex-col gap-1 items-start">
+                              <span
+                                className={`px-2 py-0.5 text-[10px] uppercase font-mono tracking-wider border ${
+                                  client.status === 'APPROVED'
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : client.status === 'IN_REVIEW'
+                                    ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                    : client.status === 'PENDING'
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                    : 'bg-stone-100 text-stone-600 border-stone-200'
+                                }`}
+                              >
+                                {client.status.replace('_', ' ')}
+                              </span>
+                              <span className="text-[10px] text-stone-500 flex items-center gap-1 font-mono">
+                                <MailCheck className="w-3 h-3 text-emerald-600" />
+                                {client.invitationStatus === 'sent' || client.invitationSentAt ? 'Invite Dispatched' : 'Pending Invite'}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              {/* Status select */}
+                              <select
+                                value={client.status}
+                                onChange={(e) => handleUpdateClientStatus(client.id, e.target.value)}
+                                className="text-[11px] px-2 py-1 bg-white border border-stone-300 text-stone-700"
+                              >
+                                <option value="PENDING">PENDING</option>
+                                <option value="IN_REVIEW">IN REVIEW</option>
+                                <option value="APPROVED">APPROVED</option>
+                                <option value="DECLINED">DECLINED</option>
+                                <option value="ARCHIVED">ARCHIVED</option>
+                              </select>
+
+                              {/* Resend Invite */}
+                              <button
+                                onClick={() => handleResendClientInvite(client.id)}
+                                disabled={isResendingInvite === client.id}
+                                className="px-2.5 py-1 text-[11px] bg-stone-100 hover:bg-stone-200 border border-stone-300 text-stone-800 inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+                                title="Resend Account Activation Invitation via Resend"
+                              >
+                                {isResendingInvite === client.id ? (
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Send className="w-3 h-3" />
+                                )}
+                                <span>Invite</span>
+                              </button>
+
+                              {/* Notes & Followups */}
+                              <button
+                                onClick={() => handleOpenClientNotes(client)}
+                                className="px-2.5 py-1 text-[11px] bg-[#0A192F] hover:bg-[#112240] text-white inline-flex items-center gap-1 transition-colors"
+                              >
+                                <MessageSquare className="w-3 h-3 text-[#D4AF37]" />
+                                <span>CRM Notes</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1737,6 +1970,128 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 Confirm Wire Disbursed & Settle Batch
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 7: CLIENT CRM CONFIDENTIAL NOTES & FOLLOWUPS */}
+      {selectedClientForNotes && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="bg-[#FAF9F6] border border-[#E2DDD3] max-w-3xl w-full p-8 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setSelectedClientForNotes(null)}
+              className="absolute top-6 right-6 text-stone-500 hover:text-[#0A192F]"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <span className="text-[10px] uppercase tracking-widest text-[#D4AF37] font-semibold block mb-1">
+              Fiduciary Records & Due Diligence (Staff Only)
+            </span>
+            <h3 className="font-serif text-2xl text-[#0A192F] font-normal mb-1">
+              Client CRM Dossier: {selectedClientForNotes.fullName}
+            </h3>
+            <p className="text-xs text-stone-600 mb-6 font-light">
+              Ref: <span className="font-mono text-[#0A192F]">{selectedClientForNotes.referenceNumber}</span> · {selectedClientForNotes.email} · {selectedClientForNotes.country || 'International'}
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Left Column: Staff CRM Notes */}
+              <div className="space-y-4">
+                <h4 className="text-xs uppercase tracking-wider font-semibold text-[#0A192F] flex items-center gap-1.5 border-b border-stone-200 pb-2">
+                  <MessageSquare className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>Confidential Internal Notes</span>
+                </h4>
+
+                {/* New Note Form */}
+                <form onSubmit={handleAddClientNote} className="space-y-2">
+                  <textarea
+                    rows={3}
+                    value={newNoteContent}
+                    onChange={(e) => setNewNoteContent(e.target.value)}
+                    placeholder="Enter compliance check, retainer discussion, risk review..."
+                    required
+                    className="w-full text-xs p-2.5 bg-white border border-stone-300 focus:outline-hidden focus:border-[#0A192F]"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full py-1.5 bg-[#0A192F] hover:bg-[#112240] text-white text-[11px] uppercase tracking-wider transition-colors"
+                  >
+                    Record Staff Note
+                  </button>
+                </form>
+
+                {/* Notes List */}
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {clientNotes.length === 0 ? (
+                    <div className="text-xs text-stone-500 font-light p-3 bg-stone-50 border border-stone-200 text-center">
+                      No internal notes recorded yet.
+                    </div>
+                  ) : (
+                    clientNotes.map((note) => (
+                      <div key={note.id} className="p-3 bg-white border border-stone-200 text-xs space-y-1">
+                        <div className="flex items-center justify-between text-[10px] text-stone-400 font-mono">
+                          <span>{note.authorEmail}</span>
+                          <span>{new Date(note.createdAt).toLocaleDateString()}</span>
+                        </div>
+                        <p className="text-stone-800 leading-relaxed font-light">{note.content}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Scheduled Followups */}
+              <div className="space-y-4">
+                <h4 className="text-xs uppercase tracking-wider font-semibold text-[#0A192F] flex items-center gap-1.5 border-b border-stone-200 pb-2">
+                  <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>Scheduled Follow-up Reminders</span>
+                </h4>
+
+                {/* New Followup Form */}
+                <form onSubmit={handleAddClientFollowup} className="space-y-2">
+                  <input
+                    type="date"
+                    value={newFollowupDueDate}
+                    onChange={(e) => setNewFollowupDueDate(e.target.value)}
+                    required
+                    className="w-full text-xs p-2 bg-white border border-stone-300"
+                  />
+                  <input
+                    type="text"
+                    value={newFollowupNotes}
+                    onChange={(e) => setNewFollowupNotes(e.target.value)}
+                    placeholder="e.g. Call regarding sovereign jurisdiction advisory"
+                    className="w-full text-xs p-2 bg-white border border-stone-300"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full py-1.5 bg-[#D4AF37] hover:bg-[#c29e2f] text-[#0A192F] text-[11px] font-semibold uppercase tracking-wider transition-colors"
+                  >
+                    Schedule Follow-up
+                  </button>
+                </form>
+
+                {/* Followups List */}
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {clientFollowups.length === 0 ? (
+                    <div className="text-xs text-stone-500 font-light p-3 bg-stone-50 border border-stone-200 text-center">
+                      No pending follow-ups scheduled.
+                    </div>
+                  ) : (
+                    clientFollowups.map((fu) => (
+                      <div key={fu.id} className="p-3 bg-white border border-stone-200 text-xs space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <span className="text-amber-700 font-semibold">Due: {fu.dueDate}</span>
+                          <span className="uppercase text-stone-400">{fu.status}</span>
+                        </div>
+                        {fu.notes && <p className="text-stone-700 font-light">{fu.notes}</p>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

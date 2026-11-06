@@ -1,4 +1,4 @@
-export type UserRole = 'super_admin' | 'affiliate_manager' | 'finance_manager' | 'affiliate';
+export type UserRole = 'super_admin' | 'affiliate_manager' | 'finance_manager' | 'affiliate' | 'client';
 
 export interface User {
   id: string;
@@ -152,7 +152,7 @@ export interface AuditLogEntry {
   action: string;
   actorEmail: string;
   actorRole: UserRole;
-  targetType: 'application' | 'affiliate' | 'conversion' | 'commission' | 'payout' | 'commission_rule' | 'auth';
+  targetType: 'application' | 'affiliate' | 'conversion' | 'commission' | 'payout' | 'commission_rule' | 'auth' | 'client_registrations' | 'client_notes' | 'referral_leads' | 'client_inquiries' | string;
   targetId: string;
   details: string;
   timestamp: string;

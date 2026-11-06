@@ -33,7 +33,6 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   if (currentAuthToken) {
     headers.set('Authorization', `Bearer ${currentAuthToken}`);
-    headers.set('x-user-email', currentAuthToken);
   }
 
   const response = await fetch(endpoint, {
@@ -41,7 +40,17 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers,
   });
 
-  const data = await response.json().catch(() => ({}));
+  const rawText = await response.text();
+  let data: any = {};
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    // Gracefully handle non-JSON responses (such as Vercel proxy HTML 404/500 pages)
+    data = {
+      error: `HTTP ${response.status}`,
+      message: response.ok ? 'Unexpected response format.' : `Server returned status ${response.status} (${response.statusText || 'Error'})`
+    };
+  }
 
   if (!response.ok) {
     const errorMsg = data.message || data.error || `Request failed with status ${response.status}`;
@@ -308,5 +317,123 @@ export const api = {
 
   async getAdminAuditLogs(): Promise<{ auditLogs: AuditLogEntry[] }> {
     return request('/api/admin/audit-logs');
+  },
+
+  // Client Membership & Portal
+  async registerClient(data: {
+    fullName: string;
+    email: string;
+    phone?: string;
+    company?: string;
+    country: string;
+    serviceCategory: string;
+    requirementsBrief?: string;
+    referralCode?: string;
+  }): Promise<{
+    success: boolean;
+    referenceNumber: string;
+    message: string;
+    emailSent: boolean;
+    registrationId?: string;
+  }> {
+    return request('/api/client/register', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  },
+
+  async activateClientAccount(data: {
+    email: string;
+    password: string;
+    fullName?: string;
+    referenceNumber?: string;
+    token?: string;
+  }): Promise<{ success: boolean; message: string; token: string }> {
+    const res = await request<{ success: boolean; message: string; token: string }>('/api/client/activate', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+    setAuthToken(res.token);
+    return res;
+  },
+
+  async clientLogin(email: string, password: string): Promise<{ success: boolean; token: string; user: User }> {
+    const res = await request<{ success: boolean; token: string; user: User }>('/api/client/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    });
+    setAuthToken(res.token);
+    return res;
+  },
+
+  async getClientProfile(): Promise<{ authenticated: boolean; client: any }> {
+    return request('/api/client/me');
+  },
+
+  async submitClientPortalInquiry(data: {
+    serviceInterest: string;
+    briefSummary: string;
+    priority?: string;
+  }): Promise<{ success: boolean; referenceNumber: string; message: string }> {
+    return request('/api/client/inquiries', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  },
+
+  async getClientInquiries(): Promise<{ inquiries: any[] }> {
+    return request('/api/client/inquiries');
+  },
+
+  // Admin Client CRM
+  async getAdminClientRegistrations(): Promise<{ registrations: any[] }> {
+    return request('/api/admin/client-registrations');
+  },
+
+  async updateAdminClientRegistrationStatus(id: string, status: string): Promise<{ success: boolean; message: string }> {
+    return request(`/api/admin/client-registrations/${id}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status })
+    });
+  },
+
+  async resendAdminClientInvitation(id: string): Promise<{ success: boolean; message: string }> {
+    return request(`/api/admin/client-registrations/${id}/resend-invite`, {
+      method: 'POST'
+    });
+  },
+
+  async getAdminClientNotes(registrationId: string): Promise<{ notes: any[] }> {
+    return request(`/api/admin/client-notes/${registrationId}`);
+  },
+
+  async addAdminClientNote(data: {
+    registrationId: string;
+    noteType?: string;
+    content: string;
+  }): Promise<{ success: boolean; note: any }> {
+    return request('/api/admin/client-notes', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  },
+
+  async getAdminClientFollowups(registrationId?: string): Promise<{ followups: any[] }> {
+    const query = registrationId ? `?registrationId=${registrationId}` : '';
+    return request(`/api/admin/client-followups${query}`);
+  },
+
+  async addAdminClientFollowup(data: {
+    registrationId: string;
+    title: string;
+    dueDate: string;
+    priority?: string;
+    assignedTo?: string;
+    notes?: string;
+  }): Promise<{ success: boolean; followup: any }> {
+    return request('/api/admin/client-followups', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
   }
 };

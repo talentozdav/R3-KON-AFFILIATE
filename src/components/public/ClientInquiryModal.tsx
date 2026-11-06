@@ -24,6 +24,8 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [referenceNumber, setReferenceNumber] = useState<string | null>(null);
+  const [emailDispatched, setEmailDispatched] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
@@ -35,19 +37,22 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
     setErrorMsg(null);
 
     try {
-      await api.submitClientInquiry({
-        referralCode: referralCode || undefined,
-        clientName: clientName.trim(),
-        organization: organization.trim() || undefined,
+      const res = await api.registerClient({
+        fullName: clientName.trim(),
+        company: organization.trim() || undefined,
         email: email.trim(),
         phone: phone.trim() || undefined,
         country: country.trim() || 'International',
-        serviceInterest,
-        briefSummary: briefSummary.trim() || undefined
+        serviceCategory: serviceInterest,
+        requirementsBrief: briefSummary.trim() || undefined,
+        referralCode: referralCode || undefined
       });
+
+      setReferenceNumber(res.referenceNumber);
+      setEmailDispatched(res.emailSent);
       setIsSubmitted(true);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to submit inquiry.');
+      setErrorMsg(err.message || 'Failed to submit registration inquiry.');
     } finally {
       setIsSubmitting(false);
     }
@@ -80,16 +85,24 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
               <CheckCircle2 className="w-6 h-6" />
             </div>
             <span className="text-[10px] uppercase tracking-widest text-[#D4AF37] font-semibold block mb-1">
-              Confidential Intake Logged
+              Confidential Intake & Registration Confirmed
             </span>
-            <h3 className="font-serif text-2xl text-[#0A192F] font-normal mb-3">
-              Inquiry Dispatched to Senior Coordination
+            <h3 className="font-serif text-2xl text-[#0A192F] font-normal mb-2">
+              Registration Recorded in Supabase CRM
             </h3>
-            <p className="text-xs text-stone-600 leading-relaxed font-light mb-6 max-w-sm mx-auto">
-              Your inquiry has been received under strict non-disclosure protocols. An R3 Senior Coordinator will make contact via encrypted channels within 4 business hours.
+
+            {referenceNumber && (
+              <div className="my-4 p-3 bg-stone-100 border border-stone-200 inline-block font-mono text-xs text-[#0A192F]">
+                Dossier Reference: <strong>{referenceNumber}</strong>
+              </div>
+            )}
+
+            <p className="text-xs text-stone-600 leading-relaxed font-light mb-4 max-w-sm mx-auto">
+              Your registration has been confirmed. {emailDispatched ? 'An account creation invitation has been dispatched to your email address via Resend.' : 'Your account invitation is queued for dispatch.'} You may click the invitation link to set your password and access the private Client Portal.
             </p>
+
             {referralCode && (
-              <div className="p-3 bg-stone-100 text-[11px] font-mono text-stone-600 mb-6 border border-stone-200">
+              <div className="p-2.5 bg-stone-50 text-[11px] font-mono text-stone-600 mb-6 border border-stone-200">
                 Attributed Partner: {referralCode}
               </div>
             )}

@@ -122,6 +122,34 @@ referralsRouter.post('/inquire', (req: Request, res: Response) => {
     );
   }
 
+  // Also persist directly into Supabase CRM
+  import('../supabase.js').then(async ({ insertClientInquiry, insertClientRegistration }) => {
+    try {
+      await insertClientInquiry({
+        clientName: clientName.trim(),
+        email: email.trim(),
+        phone: phone ? phone.trim() : undefined,
+        organization: organization ? organization.trim() : undefined,
+        country: country ? country.trim() : 'International',
+        serviceInterest,
+        briefSummary: briefSummary ? briefSummary.trim() : undefined
+      });
+
+      await insertClientRegistration({
+        fullName: clientName.trim(),
+        email: email.trim(),
+        phone: phone ? phone.trim() : undefined,
+        company: organization ? organization.trim() : undefined,
+        country: country ? country.trim() : 'International',
+        serviceCategory: serviceInterest,
+        requirementsBrief: briefSummary ? briefSummary.trim() : undefined,
+        referralCode: cleanCode || undefined
+      });
+    } catch (crmErr: any) {
+      console.warn('[R3 Referrals Inquire] CRM persistence notice:', crmErr.message);
+    }
+  }).catch(console.error);
+
   res.status(201).json({
     success: true,
     message: 'Your inquiry has been received by R3 Contingencies executive intake. A senior coordinator will contact you confidentially.',

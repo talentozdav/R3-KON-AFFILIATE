@@ -1,4 +1,4 @@
-export type UserRole = 'super_admin' | 'affiliate_manager' | 'finance_manager' | 'affiliate';
+export type UserRole = 'super_admin' | 'affiliate_manager' | 'finance_manager' | 'affiliate' | 'client';
 
 export interface User {
   id: string;
@@ -7,6 +7,8 @@ export interface User {
   role: UserRole;
   status: 'active' | 'suspended' | 'pending_activation';
   affiliate?: Affiliate | null;
+  clientId?: string;
+  membershipTier?: string;
 }
 
 export type ApplicationStatus = 'SUBMITTED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'INFORMATION_REQUESTED';
@@ -183,4 +185,65 @@ export interface AdminOverviewMetrics {
   approvedUnpaidCommissions: number;
   totalPaidOutCommissions: number;
   activeCommissionRulesCount: number;
+}
+
+export interface ClientRegistration {
+  id: string;
+  referenceNumber: string;
+  fullName: string;
+  email: string;
+  phone?: string;
+  company?: string;
+  country: string;
+  serviceCategory: string;
+  requirementsBrief?: string;
+  referralCode?: string;
+  status: 'PENDING' | 'IN_REVIEW' | 'APPROVED' | 'DECLINED' | 'ARCHIVED';
+  invitationStatus: 'pending' | 'sent' | 'failed' | 'accepted' | 'expired';
+  invitationSentAt?: string;
+  invitationError?: string;
+  accountActivatedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientInquiry {
+  id: string;
+  referenceNumber: string;
+  clientId?: string;
+  registrationId?: string;
+  clientName: string;
+  email: string;
+  phone?: string;
+  organization?: string;
+  country: string;
+  serviceInterest: string;
+  briefSummary?: string;
+  status: 'open' | 'under_review' | 'assigned' | 'resolved' | 'closed';
+  priority: 'urgent' | 'high' | 'standard';
+  assignedCoordinator?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientNote {
+  id: string;
+  registrationId: string;
+  authorEmail: string;
+  authorName: string;
+  noteType: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface ClientFollowup {
+  id: string;
+  registrationId: string;
+  title: string;
+  dueDate: string;
+  priority: string;
+  status: string;
+  assignedTo: string;
+  notes?: string;
+  createdAt: string;
 }

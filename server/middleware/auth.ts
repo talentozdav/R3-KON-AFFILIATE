@@ -1,49 +1,62 @@
 import { Request, Response, NextFunction } from 'express';
-import { db } from '../db.js';
-import { User, UserRole } from '../types.js';
+import { verifySupabaseToken, AuthenticatedUser } from '../supabase.js';
 
 export interface AuthenticatedRequest extends Request {
-  user?: User;
+  user?: AuthenticatedUser;
 }
 
-export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+/**
+ * Server-side authorization middleware.
+ * Verifies JWT access tokens using Supabase Auth or cryptographic store.
+ * Never trusts client headers or raw emails for authorization.
+ */
+export async function authMiddleware(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const userEmail = req.headers['x-user-email'] as string || token;
 
-  if (userEmail) {
-    const user = db.users.find(u => u.email.toLowerCase() === userEmail.toLowerCase());
-    if (user && user.status === 'active') {
-      req.user = user;
+  if (token) {
+    try {
+      const user = await verifySupabaseToken(token);
+      if (user && user.status === 'active') {
+        req.user = user;
+      }
+    } catch (err: any) {
+      console.warn('[R3 Auth Middleware] Token verification failed:', err.message);
     }
   }
 
   next();
 }
 
+/**
+ * Enforces authenticated session
+ */
 export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   if (!req.user) {
     return res.status(401).json({
       error: 'Authentication required',
-      message: 'You must be authenticated to access this resource.'
+      message: 'You must be authenticated with a valid session token to access this resource.'
     });
   }
   next();
 }
 
-export function requireRoles(...allowedRoles: UserRole[]) {
+/**
+ * Enforces role-based permissions verified from trusted database records
+ */
+export function requireRoles(...allowedRoles: Array<'super_admin' | 'affiliate_manager' | 'finance_manager' | 'affiliate' | 'client'>) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({
         error: 'Authentication required',
-        message: 'You must be authenticated to access this resource.'
+        message: 'You must be authenticated to perform this operation.'
       });
     }
 
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         error: 'Access denied',
-        message: `Role '${req.user.role}' is not authorized to perform this operation. Permitted roles: ${allowedRoles.join(', ')}.`
+        message: `Role '${req.user.role}' is not authorized. Permitted roles: ${allowedRoles.join(', ')}.`
       });
     }
 

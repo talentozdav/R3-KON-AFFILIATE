@@ -6,48 +6,37 @@
 -- 1. EXTENSIONS
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 2. ENUM TYPES
-CREATE TYPE user_role AS ENUM (
-  'super_admin',
-  'affiliate_manager',
-  'finance_manager',
-  'affiliate'
-);
+-- 2. ENUM TYPES (Idempotent creation)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+    CREATE TYPE user_role AS ENUM ('super_admin', 'affiliate_manager', 'finance_manager', 'affiliate', 'client');
+  ELSE
+    BEGIN
+      ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'client';
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+  END IF;
 
-CREATE TYPE application_status AS ENUM (
-  'SUBMITTED',
-  'UNDER_REVIEW',
-  'APPROVED',
-  'REJECTED',
-  'INFORMATION_REQUESTED'
-);
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'application_status') THEN
+    CREATE TYPE application_status AS ENUM ('SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED', 'INFORMATION_REQUESTED');
+  END IF;
 
-CREATE TYPE affiliate_status AS ENUM (
-  'active',
-  'suspended',
-  'terminated',
-  'pending'
-);
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'affiliate_status') THEN
+    CREATE TYPE affiliate_status AS ENUM ('active', 'suspended', 'terminated', 'pending');
+  END IF;
 
-CREATE TYPE conversion_status AS ENUM (
-  'verified',
-  'pending_verification',
-  'reversed'
-);
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'conversion_status') THEN
+    CREATE TYPE conversion_status AS ENUM ('verified', 'pending_verification', 'reversed');
+  END IF;
 
-CREATE TYPE commission_status AS ENUM (
-  'approved',
-  'pending',
-  'reversed',
-  'paid'
-);
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'commission_status') THEN
+    CREATE TYPE commission_status AS ENUM ('approved', 'pending', 'reversed', 'paid');
+  END IF;
 
-CREATE TYPE payout_status AS ENUM (
-  'scheduled',
-  'processing',
-  'paid',
-  'cancelled'
-);
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payout_status') THEN
+    CREATE TYPE payout_status AS ENUM ('scheduled', 'processing', 'paid', 'cancelled');
+  END IF;
+END $$;
 
 -- 3. PROFILES / USERS TABLE
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -245,33 +234,41 @@ RETURNS user_role AS $$
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 -- 1. Profiles: Users can view their own profile; admins can view all
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
 CREATE POLICY "Users can view own profile" ON public.profiles
   FOR SELECT USING (id = auth.uid() OR public.current_user_role() IN ('super_admin', 'affiliate_manager', 'finance_manager'));
 
+DROP POLICY IF EXISTS "Admins can update profiles" ON public.profiles;
 CREATE POLICY "Admins can update profiles" ON public.profiles
   FOR UPDATE USING (public.current_user_role() IN ('super_admin'));
 
 -- 2. Applications: Anyone can insert (public submit); only admins can view/update
+DROP POLICY IF EXISTS "Public can submit applications" ON public.affiliate_applications;
 CREATE POLICY "Public can submit applications" ON public.affiliate_applications
   FOR INSERT WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Admins can view and manage applications" ON public.affiliate_applications;
 CREATE POLICY "Admins can view and manage applications" ON public.affiliate_applications
   FOR ALL USING (public.current_user_role() IN ('super_admin', 'affiliate_manager'));
 
 -- 3. Affiliates: Affiliates see only their own record; admins see all
+DROP POLICY IF EXISTS "Affiliates can view own record" ON public.affiliates;
 CREATE POLICY "Affiliates can view own record" ON public.affiliates
   FOR SELECT USING (user_id = auth.uid() OR public.current_user_role() IN ('super_admin', 'affiliate_manager', 'finance_manager'));
 
+DROP POLICY IF EXISTS "Admins manage affiliates" ON public.affiliates;
 CREATE POLICY "Admins manage affiliates" ON public.affiliates
   FOR ALL USING (public.current_user_role() IN ('super_admin', 'affiliate_manager'));
 
 -- 4. Referral Leads: Affiliates view only their attributed leads
+DROP POLICY IF EXISTS "Affiliates view own leads" ON public.referral_leads;
 CREATE POLICY "Affiliates view own leads" ON public.referral_leads
   FOR SELECT USING (
     affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
     OR public.current_user_role() IN ('super_admin', 'affiliate_manager')
   );
 
+DROP POLICY IF EXISTS "Affiliates can submit leads" ON public.referral_leads;
 CREATE POLICY "Affiliates can submit leads" ON public.referral_leads
   FOR INSERT WITH CHECK (
     affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
@@ -279,35 +276,42 @@ CREATE POLICY "Affiliates can submit leads" ON public.referral_leads
   );
 
 -- 5. Conversions: Affiliates can only read; ONLY ADMINS can insert or verify
+DROP POLICY IF EXISTS "Affiliates view own conversions" ON public.conversions;
 CREATE POLICY "Affiliates view own conversions" ON public.conversions
   FOR SELECT USING (
     affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
     OR public.current_user_role() IN ('super_admin', 'affiliate_manager', 'finance_manager')
   );
 
+DROP POLICY IF EXISTS "Admins manage conversions" ON public.conversions;
 CREATE POLICY "Admins manage conversions" ON public.conversions
   FOR ALL USING (public.current_user_role() IN ('super_admin', 'finance_manager'));
 
 -- 6. Commissions: Affiliates can only read; NO affiliate edit or approval!
+DROP POLICY IF EXISTS "Affiliates view own commissions" ON public.commissions;
 CREATE POLICY "Affiliates view own commissions" ON public.commissions
   FOR SELECT USING (
     affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
     OR public.current_user_role() IN ('super_admin', 'finance_manager')
   );
 
+DROP POLICY IF EXISTS "Admins manage commissions" ON public.commissions;
 CREATE POLICY "Admins manage commissions" ON public.commissions
   FOR ALL USING (public.current_user_role() IN ('super_admin', 'finance_manager'));
 
 -- 7. Payouts: Affiliates read only their own payouts; only Finance/Super admin manages
+DROP POLICY IF EXISTS "Affiliates view own payouts" ON public.payouts;
 CREATE POLICY "Affiliates view own payouts" ON public.payouts
   FOR SELECT USING (
     affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
     OR public.current_user_role() IN ('super_admin', 'finance_manager')
   );
 
+DROP POLICY IF EXISTS "Finance managers manage payouts" ON public.payouts;
 CREATE POLICY "Finance managers manage payouts" ON public.payouts
   FOR ALL USING (public.current_user_role() IN ('super_admin', 'finance_manager'));
 
 -- 8. Audit Logs: Strictly Super Admin and Managers can view; insertions only by trusted backend
+DROP POLICY IF EXISTS "Admins can view audit logs" ON public.audit_logs;
 CREATE POLICY "Admins can view audit logs" ON public.audit_logs
   FOR SELECT USING (public.current_user_role() IN ('super_admin', 'affiliate_manager', 'finance_manager'));

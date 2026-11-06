@@ -70,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <UserCheck className="w-3.5 h-3.5 text-[#D4AF37]" />
               <span>
-                {user.role === 'affiliate' ? 'Partner Portal' : 'Admin Area'}
+                {user.role === 'affiliate' ? 'Partner Portal' : user.role === 'client' ? 'Client Portal' : 'Admin Area'}
               </span>
             </button>
           ) : (

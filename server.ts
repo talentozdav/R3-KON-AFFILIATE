@@ -9,6 +9,8 @@ import { affiliatesRouter } from './server/routes/affiliates.js';
 import { adminRouter } from './server/routes/admin.js';
 import { referralsRouter } from './server/routes/referrals.js';
 
+import { clientRouter } from './server/routes/client.js';
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,7 +29,7 @@ app.use(authMiddleware);
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'operational',
-    network: 'R3 Global Affiliate Network',
+    network: 'R3 Global Affiliate Network & Client Coordination',
     environment: isProduction ? 'production' : 'development',
     serverless: isVercel,
     timestamp: new Date().toISOString()
@@ -40,6 +42,24 @@ app.use('/api/applications', applicationsRouter);
 app.use('/api/affiliates', affiliatesRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/referrals', referralsRouter);
+app.use('/api/client', clientRouter);
+
+// JSON 404 handler for any unmapped API endpoint (prevents Vercel HTML error parsing failures)
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    error: 'Endpoint Not Found',
+    message: `Cannot ${req.method} ${req.originalUrl}. Verify API endpoint path.`
+  });
+});
+
+// JSON error middleware
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[R3 Server Error]:', err);
+  res.status(err.status || 500).json({
+    error: err.name || 'Internal Server Error',
+    message: err.message || 'An internal server error occurred.'
+  });
+});
 
 // Local / Standalone Server initialization
 async function setupViteAndListen() {

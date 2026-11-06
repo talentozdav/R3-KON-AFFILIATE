@@ -25,6 +25,8 @@ function checkRateLimit(ip: string): boolean {
   return record.count <= MAX_ATTEMPTS;
 }
 
+import { supabaseAdmin, supabasePublic } from '../supabase.js';
+
 // Get current session profile
 authRouter.get('/me', (req: AuthenticatedRequest, res: Response) => {
   if (!req.user) {
@@ -44,13 +46,15 @@ authRouter.get('/me', (req: AuthenticatedRequest, res: Response) => {
       fullName: req.user.fullName,
       role: req.user.role,
       status: req.user.status,
-      affiliate: affiliateData
+      affiliate: affiliateData,
+      clientId: req.user.clientId,
+      membershipTier: req.user.membershipTier
     }
   });
 });
 
 // Authenticate via credentials
-authRouter.post('/login', (req: AuthenticatedRequest, res: Response) => {
+authRouter.post('/login', async (req: AuthenticatedRequest, res: Response) => {
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
 
   if (!checkRateLimit(ip)) {
@@ -67,6 +71,69 @@ authRouter.post('/login', (req: AuthenticatedRequest, res: Response) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+
+  // 1. Supabase Auth Verification
+  if (supabasePublic && password) {
+    try {
+      const { data, error } = await supabasePublic.auth.signInWithPassword({
+        email: normalizedEmail,
+        password
+      });
+
+      if (!error && data.user) {
+        let profile = null;
+        let role = (data.user.user_metadata?.role as any) || 'client';
+        let affiliateData = null;
+
+        if (supabaseAdmin) {
+          const { data: p } = await supabaseAdmin.from('profiles').select('*').eq('id', data.user.id).maybeSingle();
+          if (p) {
+            profile = p;
+            role = p.role;
+            if (role === 'affiliate') {
+              const { data: aff } = await supabaseAdmin.from('affiliates').select('*').eq('user_id', data.user.id).maybeSingle();
+              affiliateData = aff;
+            }
+          } else {
+            const { data: cp } = await supabaseAdmin.from('client_profiles').select('*').eq('id', data.user.id).maybeSingle();
+            if (cp) {
+              profile = cp;
+              role = 'client';
+            }
+          }
+        }
+
+        db.recordAuditLog(
+          normalizedEmail,
+          role,
+          'SUPABASE_USER_LOGIN',
+          'auth',
+          data.user.id,
+          `Authenticated via Supabase Auth. Role: ${role}`,
+          req.ip
+        );
+
+        return res.json({
+          success: true,
+          token: data.session?.access_token || normalizedEmail,
+          user: {
+            id: data.user.id,
+            email: data.user.email,
+            fullName: profile?.full_name || data.user.user_metadata?.full_name || data.user.email,
+            role,
+            status: profile?.status || 'active',
+            affiliate: affiliateData,
+            clientId: role === 'client' ? data.user.id : undefined,
+            membershipTier: profile?.membership_tier
+          }
+        });
+      }
+    } catch (err: any) {
+      console.warn('[R3 Login] Supabase Auth check notice:', err.message);
+    }
+  }
+
+  // 2. Memory Database fallback
   const user = db.users.find(u => u.email.toLowerCase() === normalizedEmail);
 
   if (!user) {
