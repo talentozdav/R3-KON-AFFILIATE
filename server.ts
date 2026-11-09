@@ -10,6 +10,7 @@ import { adminRouter } from './server/routes/admin.js';
 import { referralsRouter } from './server/routes/referrals.js';
 
 import { clientRouter } from './server/routes/client.js';
+import { checkDatabaseConnectivity } from './server/supabase.js';
 
 dotenv.config();
 
@@ -25,13 +26,19 @@ app.use(express.json());
 app.use(express.static(path.resolve(__dirname, 'public')));
 app.use(authMiddleware);
 
-// Health check
-app.get('/api/health', (_req, res) => {
+// Health check with live database connectivity test
+app.get('/api/health', async (_req, res) => {
+  const dbHealth = await checkDatabaseConnectivity();
   res.json({
-    status: 'operational',
+    status: dbHealth.connected ? 'operational' : 'degraded',
     network: 'R3 Global Affiliate Network & Client Coordination',
     environment: isProduction ? 'production' : 'development',
     serverless: isVercel,
+    database: {
+      connected: dbHealth.connected,
+      latencyMs: dbHealth.latencyMs,
+      error: dbHealth.error || null
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -86,8 +93,9 @@ async function setupViteAndListen() {
   }
 }
 
-// In non-Vercel environments, run setup
-if (!isVercel) {
+// Only run server listener if server.ts is the main module
+const isMain = process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js');
+if (!isVercel && isMain && process.env.NODE_ENV !== 'test') {
   setupViteAndListen().catch((err) => {
     console.error('[R3 Network] Failed to initialize server:', err);
     process.exit(1);

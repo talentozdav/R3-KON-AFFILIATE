@@ -1,11 +1,16 @@
 import { Router, Request, Response } from 'express';
 import {
   insertClientRegistration,
+  getClientRegistrations,
   updateClientRegistrationInvitation,
   insertClientInquiry,
   getClientInquiries,
+  getAffiliateByCode,
+  createReferralLead,
+  recordAuditLog,
   supabaseAdmin,
-  supabasePublic
+  supabasePublic,
+  isProduction
 } from '../supabase.js';
 import {
   sendClientAccountInvitation,
@@ -13,12 +18,11 @@ import {
   sendClientRegistrationConfirmation
 } from '../services/mailer.js';
 import { AuthenticatedRequest, requireAuth, requireRoles } from '../middleware/auth.js';
-import { db } from '../db.js';
 import crypto from 'crypto';
 
 export const clientRouter = Router();
 
-// In-memory token store for client account invitations when running without Supabase service role
+// In-memory token store for client account invitations when running without Supabase service role in local dev
 const clientActivationTokens: Map<string, { email: string; registrationId: string; expiresAt: number }> = new Map();
 
 /**
@@ -68,6 +72,19 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
+    // Check for existing active registration
+    const existing = await getClientRegistrations();
+    const duplicate = existing.find(
+      r => r.email.toLowerCase() === normalizedEmail && r.status !== 'DECLINED' && r.status !== 'ARCHIVED'
+    );
+    if (duplicate) {
+      return res.status(409).json({
+        error: 'Duplicate Registration',
+        message: 'A client profile or active registration already exists for this email address.',
+        referenceNumber: duplicate.referenceNumber
+      });
+    }
+
     // 1. Save to Supabase CRM (client_registrations)
     const registration = await insertClientRegistration({
       fullName: fullName.trim(),
@@ -80,39 +97,38 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       referralCode: referralCode ? referralCode.trim().toUpperCase() : undefined
     });
 
-    // 2. If attributed via affiliate referral code, register lead in affiliate tracking
+    // 2. If attributed via affiliate referral code, register lead in permanent affiliate tracking
     if (referralCode) {
-      const cleanCode = referralCode.trim().toUpperCase();
-      const affiliate = db.affiliates.find(a => a.referralCode.toUpperCase() === cleanCode);
-      if (affiliate && affiliate.status === 'active') {
-        const maskedClient = company
-          ? `${company.trim()} (${country.trim()})`
-          : `Private Principal (${country.trim()})`;
+      try {
+        const cleanCode = referralCode.trim().toUpperCase();
+        const affiliate = await getAffiliateByCode(cleanCode);
+        if (affiliate && affiliate.status === 'active') {
+          const maskedClient = company
+            ? `${company.trim()} (${country.trim()})`
+            : `Private Principal (${country.trim()})`;
 
-        const leadRecord = {
-          id: `lead_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          affiliateId: affiliate.id,
-          referralCode: cleanCode,
-          clientIdentifier: maskedClient,
-          clientType: (company ? 'Corporate' : 'Individual') as any,
-          region: country.trim(),
-          serviceCategory: serviceCategory.trim(),
-          status: 'in_review' as const,
-          notes: `Client registration [${registration.referenceNumber}]. Retainer category: ${serviceCategory.trim()}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        db.leads.unshift(leadRecord);
+          const leadRecord = await createReferralLead({
+            affiliateId: affiliate.id,
+            referralCode: cleanCode,
+            clientIdentifier: maskedClient,
+            clientType: company ? 'Corporate' : 'Individual',
+            region: country.trim(),
+            serviceCategory: serviceCategory.trim(),
+            notes: `Client registration [${registration.referenceNumber}]. Retainer category: ${serviceCategory.trim()}`
+          });
 
-        db.recordAuditLog(
-          'system',
-          'super_admin',
-          'LEAD_ATTRIBUTED',
-          'affiliate',
-          affiliate.id,
-          `Client registration ${registration.referenceNumber} attributed to affiliate ${affiliate.affiliateNumber}`,
-          req.ip
-        );
+          await recordAuditLog(
+            'system',
+            'super_admin',
+            'LEAD_ATTRIBUTED',
+            'referral_leads',
+            leadRecord.id,
+            `Client registration ${registration.referenceNumber} attributed to affiliate ${affiliate.affiliateNumber}`,
+            req.ip
+          );
+        }
+      } catch (attErr: any) {
+        console.warn('[R3 Client Register] Lead attribution notice:', attErr.message);
       }
     }
 
@@ -137,7 +153,6 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
 
         if (linkErr) {
           console.warn('[R3 Client Register] Supabase generateLink notice:', linkErr.message);
-          // Generate fallback secure activation token
           const token = crypto.randomBytes(32).toString('hex');
           clientActivationTokens.set(token, {
             email: normalizedEmail,
@@ -181,6 +196,12 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
     res.status(201).json({
       success: true,
       referenceNumber: registration.referenceNumber,
+      client: {
+        id: registration.id,
+        referenceNumber: registration.referenceNumber,
+        fullName: fullName.trim(),
+        email: normalizedEmail
+      },
       message: emailSent
         ? 'Client registration recorded. Your account creation invitation has been dispatched to your email.'
         : 'Client registration recorded. Note: Transactional email delivery is queued for dispatch.',
@@ -198,7 +219,7 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
 
 /**
  * 2. POST /api/client/activate
- * Client completes account creation by confirming token and setting their security password.
+ * Client completes account creation by setting their security password and activating Supabase Auth account.
  */
 clientRouter.post('/activate', async (req: Request, res: Response) => {
   const { email, password, token, referenceNumber } = req.body;
@@ -228,7 +249,7 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
       let userId = authData?.user?.id;
 
       if (authErr) {
-        // If user already exists in auth, update their password
+        // If user already exists in auth, update their password and confirm email
         const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
         const existing = listData?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
         if (existing) {
@@ -252,7 +273,7 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
           status: 'active'
         });
 
-        // 3. Update registration status
+        // 3. Update registration status in client_registrations
         await supabaseAdmin
           .from('client_registrations')
           .update({
@@ -264,23 +285,42 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
           .eq('email', normalizedEmail);
       }
 
-      // Send confirmation
+      // 4. Send confirmation email
       sendClientActivationConfirmation({
         email: normalizedEmail,
         fullName: req.body.fullName || 'Valued Client'
       }).catch(console.error);
 
+      // 5. Generate authentic Supabase Auth session token
+      let sessionToken = normalizedEmail;
+      if (supabasePublic) {
+        const { data: sessionData } = await supabasePublic.auth.signInWithPassword({
+          email: normalizedEmail,
+          password
+        });
+        if (sessionData?.session?.access_token) {
+          sessionToken = sessionData.session.access_token;
+        }
+      }
+
       return res.json({
         success: true,
         message: 'Client account activated successfully. You may now access the Client Portal.',
-        token: normalizedEmail
+        token: sessionToken
       });
     }
 
-    // Local in-memory fallback
+    if (isProduction) {
+      return res.status(500).json({
+        error: 'Database Error',
+        message: 'Database service unavailable in production. Cannot activate account.'
+      });
+    }
+
+    // Local in-memory fallback for development test fixtures
     res.json({
       success: true,
-      message: 'Account activated successfully.',
+      message: 'Account activated successfully (development test mode).',
       token: normalizedEmail
     });
   } catch (err: any) {
@@ -340,31 +380,38 @@ clientRouter.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Local fallback
+    if (isProduction) {
+      return res.status(500).json({
+        error: 'Authentication Unavailable',
+        message: 'Authentication service not initialized in production.'
+      });
+    }
+
+    // Local fallback for dev test fixtures
     res.json({
       success: true,
       token: normalizedEmail,
       user: {
-        id: `usr_${Date.now()}`,
+        id: `clt_dev_${Date.now()}`,
         email: normalizedEmail,
-        fullName: 'Client Member',
+        fullName: 'Client Member (Dev)',
         role: 'client',
         status: 'active',
         membershipTier: 'Executive Contingency Retainer'
       }
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Login error', message: err.message });
+    res.status(500).json({ error: 'Login failed', message: err.message });
   }
 });
 
 /**
  * 4. GET /api/client/me
- * Returns authenticated client dossier and status
+ * Authenticated client profile and active inquiries
  */
 clientRouter.get('/me', requireAuth, requireRoles('client', 'super_admin'), async (req: AuthenticatedRequest, res: Response) => {
+  const user = req.user!;
   try {
-    const user = req.user!;
     const inquiries = await getClientInquiries(user.id);
 
     res.json({
@@ -373,36 +420,36 @@ clientRouter.get('/me', requireAuth, requireRoles('client', 'super_admin'), asyn
         id: user.id,
         email: user.email,
         fullName: user.fullName,
-        role: user.role,
+        role: 'client',
         membershipTier: user.membershipTier || 'Executive Contingency Retainer',
         inquiries
       }
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Failed to fetch client profile', message: err.message });
+    res.status(500).json({ error: 'Failed to fetch client dossier', message: err.message });
   }
 });
 
 /**
  * 5. POST /api/client/inquiries
- * Authenticated client submits a confidential inquiry or emergency brief
+ * Submits an operational brief or confidential advisory request
  */
-clientRouter.post('/inquiries', requireAuth, requireRoles('client'), async (req: AuthenticatedRequest, res: Response) => {
+clientRouter.post('/inquiries', requireAuth, requireRoles('client', 'super_admin'), async (req: AuthenticatedRequest, res: Response) => {
+  const user = req.user!;
+  const { serviceInterest, briefSummary, priority, country } = req.body;
+
+  if (!serviceInterest) {
+    return res.status(400).json({ error: 'Service interest category is required.' });
+  }
+
   try {
-    const user = req.user!;
-    const { serviceInterest, briefSummary, priority } = req.body;
-
-    if (!serviceInterest || !briefSummary) {
-      return res.status(400).json({ error: 'Service interest and brief summary are required.' });
-    }
-
     const inquiry = await insertClientInquiry({
       clientId: user.id,
       clientName: user.fullName,
       email: user.email,
-      country: 'International',
+      country: country || 'International',
       serviceInterest,
-      briefSummary,
+      briefSummary: briefSummary ? briefSummary.trim() : undefined,
       priority: priority || 'high'
     });
 
@@ -412,17 +459,17 @@ clientRouter.post('/inquiries', requireAuth, requireRoles('client'), async (req:
       message: 'Inquiry logged confidentially under strict non-disclosure protocol.'
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Failed to submit inquiry', message: err.message });
+    res.status(500).json({ error: 'Failed to record brief', message: err.message });
   }
 });
 
 /**
  * 6. GET /api/client/inquiries
- * Returns inquiries for the currently signed-in client
+ * Lists all advisory briefs submitted by the authenticated client
  */
-clientRouter.get('/inquiries', requireAuth, requireRoles('client'), async (req: AuthenticatedRequest, res: Response) => {
+clientRouter.get('/inquiries', requireAuth, requireRoles('client', 'super_admin'), async (req: AuthenticatedRequest, res: Response) => {
+  const user = req.user!;
   try {
-    const user = req.user!;
     const inquiries = await getClientInquiries(user.id);
     res.json({ inquiries });
   } catch (err: any) {

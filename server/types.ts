@@ -58,6 +58,7 @@ export interface Affiliate {
   approvedRatePercent: number; // Configured approved commission rate e.g. 10.0
   totalClicks: number;
   uniqueVisitors: number;
+  updatedAt?: string;
 }
 
 export type LeadStatus = 'in_review' | 'engaged' | 'qualified' | 'converted' | 'disqualified';

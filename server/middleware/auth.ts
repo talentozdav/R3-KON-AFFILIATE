@@ -44,7 +44,7 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
 /**
  * Enforces role-based permissions verified from trusted database records
  */
-export function requireRoles(...allowedRoles: Array<'super_admin' | 'affiliate_manager' | 'finance_manager' | 'affiliate' | 'client'>) {
+export function requireRoles(...allowedRoles: Array<'super_admin' | 'affiliate_manager' | 'finance_manager' | 'compliance_officer' | 'affiliate' | 'client'>) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({

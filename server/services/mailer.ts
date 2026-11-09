@@ -262,8 +262,90 @@ export async function sendAffiliateRegistrationConfirmation(params: {
   });
 }
 
+export const sendAffiliateApplicationConfirmation = sendAffiliateRegistrationConfirmation;
+
 /**
- * Event 6 & 7: Administrative Notice
+ * Event 6: Affiliate Approval & Activation Instructions
+ */
+export async function sendAffiliateApprovalActivation(params: {
+  email: string;
+  fullName: string;
+  referralCode: string;
+  activationUrl?: string;
+  loginUrl?: string;
+  approvedRatePercent?: number;
+  referenceNumber?: string;
+}): Promise<SendEmailResult> {
+  const { email, fullName, referralCode } = params;
+  const activationUrl = params.activationUrl || params.loginUrl || 'https://r3-kon.vercel.app/affiliate/portal?mode=login';
+
+  const html = `
+    <div style="font-family: sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">
+      <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #E2DDD3; padding: 36px;">
+        <div style="border-bottom: 2px solid #0A192F; padding-bottom: 16px; margin-bottom: 24px;">
+          <h2 style="font-family: Georgia, serif; color: #0A192F; margin: 0; font-size: 24px;">R3 CONTINGENCIES</h2>
+          <span style="font-size: 11px; color: #D4AF37; text-transform: uppercase; letter-spacing: 2px; font-weight: 600;">Global Affiliate Network</span>
+        </div>
+        <h3 style="font-family: Georgia, serif; color: #0A192F; margin: 0 0 12px 0;">Partnership Application Approved</h3>
+        <p style="font-size: 14px; color: #2D3748; line-height: 1.6;">
+          Dear ${fullName}, we are pleased to inform you that your application for the R3 Global Affiliate Network has been approved.
+        </p>
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; margin: 20px 0; font-family: monospace;">
+          <div>Designated Referral Code: <strong>${referralCode}</strong></div>
+        </div>
+        <p style="font-size: 14px; color: #2D3748; line-height: 1.6;">
+          Please complete your partnership account activation and security setup via the link below:
+        </p>
+        <div style="margin: 28px 0; text-align: center;">
+          <a href="${activationUrl}" style="background-color: #0A192F; color: #FAF9F6; padding: 14px 28px; text-decoration: none; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; display: inline-block;">
+            Activate Partner Account
+          </a>
+        </div>
+      </div>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: email,
+    subject: `R3 Global Affiliate Network — Partnership Approved [${referralCode}]`,
+    html
+  });
+}
+
+/**
+ * Event 7: Verified Conversion Notice
+ */
+export async function sendConversionRecordedNotice(params: {
+  email: string;
+  fullName: string;
+  transactionRef: string;
+  commissionEstimate: string;
+}): Promise<SendEmailResult> {
+  const { email, fullName, transactionRef, commissionEstimate } = params;
+
+  const html = `
+    <div style="font-family: sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">
+      <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #E2DDD3; padding: 36px;">
+        <h3 style="font-family: Georgia, serif; color: #0A192F; margin: 0 0 12px 0;">Verified Referral Conversion</h3>
+        <p style="font-size: 14px; color: #2D3748; line-height: 1.6;">
+          Dear ${fullName}, a client transaction attributed to your partner code has been verified under reference <strong>${transactionRef}</strong>.
+        </p>
+        <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 16px; margin: 20px 0; font-family: monospace; color: #166534;">
+          <div>Estimated Commission: <strong>${commissionEstimate}</strong></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: email,
+    subject: `R3 Global Affiliate Network — Verified Referral Sale [${transactionRef}]`,
+    html
+  });
+}
+
+/**
+ * Event 8: Administrative Notice
  */
 export async function sendAdministrativeNotification(params: {
   subject: string;

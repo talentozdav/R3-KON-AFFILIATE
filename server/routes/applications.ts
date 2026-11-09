@@ -1,6 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { db } from '../db.js';
-import { AffiliateApplication } from '../types.js';
+import {
+  createAffiliateApplication,
+  getAffiliateApplicationByEmail,
+  getAffiliateApplicationByRef,
+  recordAuditLog
+} from '../supabase.js';
+import { sendAffiliateRegistrationConfirmation } from '../services/mailer.js';
 
 export const applicationsRouter = Router();
 
@@ -9,7 +14,7 @@ const APP_WINDOW = 60 * 60 * 1000; // 1 hour
 const MAX_APP_SUBMISSIONS = 5;
 
 // Submit new affiliate application
-applicationsRouter.post('/', (req: Request, res: Response) => {
+applicationsRouter.post('/', async (req: Request, res: Response) => {
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
   const nowMs = Date.now();
   const rec = appSubmissionAttempts.get(ip);
@@ -102,80 +107,86 @@ applicationsRouter.post('/', (req: Request, res: Response) => {
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  // Duplicate check:
-  // Prevent duplicate submissions if an application with this email is currently pending or active
-  const existingApp = db.applications.find(a => a.email.toLowerCase() === normalizedEmail);
-  if (existingApp) {
-    if (existingApp.status === 'SUBMITTED' || existingApp.status === 'UNDER_REVIEW') {
-      return res.status(409).json({
-        error: 'Duplicate application detected',
-        message: `An application associated with ${normalizedEmail} is already actively being processed under reference ${existingApp.referenceNumber}. Our compliance team evaluates applications sequentially.`,
-        referenceNumber: existingApp.referenceNumber,
-        status: existingApp.status
-      });
+  try {
+    // 1. Duplicate check in database
+    const existingApp = await getAffiliateApplicationByEmail(normalizedEmail);
+    if (existingApp) {
+      if (existingApp.status === 'SUBMITTED' || existingApp.status === 'UNDER_REVIEW') {
+        return res.status(409).json({
+          error: 'Duplicate application detected',
+          message: `An application associated with ${normalizedEmail} is already actively being processed under reference ${existingApp.referenceNumber}. Our compliance team evaluates applications sequentially.`,
+          referenceNumber: existingApp.referenceNumber,
+          status: existingApp.status
+        });
+      }
+
+      if (existingApp.status === 'APPROVED') {
+        return res.status(409).json({
+          error: 'Application already approved',
+          message: `An application for ${normalizedEmail} has already been approved under reference ${existingApp.referenceNumber}. Please proceed to account activation or member login.`,
+          referenceNumber: existingApp.referenceNumber,
+          status: existingApp.status
+        });
+      }
     }
 
-    if (existingApp.status === 'APPROVED') {
-      return res.status(409).json({
-        error: 'Application already approved',
-        message: `An application for ${normalizedEmail} has already been approved under reference ${existingApp.referenceNumber}. Please proceed to account activation or member login.`,
-        referenceNumber: existingApp.referenceNumber,
-        status: existingApp.status
-      });
-    }
+    // 2. Insert into permanent database
+    const application = await createAffiliateApplication({
+      fullName: fullName.trim(),
+      applicantType,
+      businessName: businessName?.trim() || undefined,
+      email: normalizedEmail,
+      phone: phone.trim(),
+      country: country.trim(),
+      partnershipCategory,
+      industryBackground: industryBackground.trim(),
+      audienceDescription: audienceDescription.trim(),
+      partnershipObjectives: partnershipObjectives.trim(),
+      additionalInfo: additionalInfo?.trim() || undefined,
+      termsAccepted: true,
+      privacyAccepted: true
+    });
+
+    // 3. Record audit log
+    await recordAuditLog(
+      normalizedEmail,
+      'affiliate',
+      'APPLICATION_SUBMITTED',
+      'affiliate_applications',
+      application.id,
+      `New partnership application submitted: ${application.referenceNumber} (${applicantType}${businessName ? ` - ${businessName}` : ''})`,
+      ip
+    );
+
+    // 4. Send Confirmation Email via Resend
+    sendAffiliateRegistrationConfirmation({
+      email: normalizedEmail,
+      fullName: application.fullName,
+      referenceNumber: application.referenceNumber
+    }).catch(err => {
+      console.warn('[R3 Applications] Non-blocking email notice:', err.message);
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Your partnership application has been formally received and logged in the R3 Global Affiliate registry.',
+      referenceNumber: application.referenceNumber,
+      status: application.status,
+      submittedAt: application.submittedAt,
+      applicantName: application.fullName,
+      application
+    });
+  } catch (err: any) {
+    console.error('[R3 Application Error]:', err);
+    res.status(500).json({
+      error: 'Submission Failed',
+      message: err.message || 'An unexpected error occurred while processing your partnership application.'
+    });
   }
-
-  // Generate institutional reference: R3-APP-2026-XXXX
-  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-  const referenceNumber = `R3-APP-2026-${randomSuffix}`;
-  const now = new Date().toISOString();
-
-  const newApplication: AffiliateApplication = {
-    id: `app_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    referenceNumber,
-    fullName: fullName.trim(),
-    applicantType,
-    businessName: businessName?.trim() || undefined,
-    email: normalizedEmail,
-    phone: phone.trim(),
-    country: country.trim(),
-    partnershipCategory,
-    industryBackground: industryBackground.trim(),
-    audienceDescription: audienceDescription.trim(),
-    partnershipObjectives: partnershipObjectives.trim(),
-    additionalInfo: additionalInfo?.trim() || undefined,
-    termsAccepted: true,
-    privacyAccepted: true,
-    status: 'SUBMITTED', // Strictly SUBMITTED - does NOT create active affiliate account
-    submittedAt: now,
-    updatedAt: now
-  };
-
-  db.applications.unshift(newApplication);
-
-  // Record audit log
-  db.recordAuditLog(
-    normalizedEmail,
-    'affiliate',
-    'APPLICATION_SUBMITTED',
-    'application',
-    newApplication.id,
-    `New partnership application submitted: ${referenceNumber} (${applicantType}${businessName ? ` - ${businessName}` : ''})`,
-    req.ip
-  );
-
-  res.status(201).json({
-    success: true,
-    message: 'Your partnership application has been formally received and logged in the R3 Global Affiliate registry.',
-    referenceNumber: newApplication.referenceNumber,
-    status: newApplication.status,
-    submittedAt: newApplication.submittedAt,
-    applicantName: newApplication.fullName
-  });
 });
 
-// Check application status by reference number and email
-applicationsRouter.get('/status', (req: Request, res: Response) => {
+// Check application status by reference number and optional email
+applicationsRouter.get('/status', async (req: Request, res: Response) => {
   const reference = (req.query.ref as string || '').trim().toUpperCase();
   const email = (req.query.email as string || '').trim().toLowerCase();
 
@@ -183,27 +194,28 @@ applicationsRouter.get('/status', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Application reference number is required.' });
   }
 
-  const app = db.applications.find(a => 
-    a.referenceNumber.toUpperCase() === reference && 
-    (!email || a.email.toLowerCase() === email)
-  );
+  try {
+    const app = await getAffiliateApplicationByRef(reference, email || undefined);
 
-  if (!app) {
-    return res.status(404).json({
-      error: 'Not found',
-      message: 'No application matching the provided reference number was found in the R3 registry.'
+    if (!app) {
+      return res.status(404).json({
+        error: 'Not found',
+        message: 'No application matching the provided reference number was found in the R3 registry.'
+      });
+    }
+
+    res.json({
+      referenceNumber: app.referenceNumber,
+      applicantType: app.applicantType,
+      fullName: app.fullName,
+      businessName: app.businessName,
+      status: app.status,
+      statusNotes: app.statusNotes,
+      submittedAt: app.submittedAt,
+      updatedAt: app.updatedAt,
+      activatedAffiliateId: app.activatedAffiliateId
     });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Query failed', message: err.message });
   }
-
-  res.json({
-    referenceNumber: app.referenceNumber,
-    applicantType: app.applicantType,
-    fullName: app.fullName,
-    businessName: app.businessName,
-    status: app.status,
-    statusNotes: app.statusNotes,
-    submittedAt: app.submittedAt,
-    updatedAt: app.updatedAt,
-    activatedAffiliateId: app.activatedAffiliateId
-  });
 });

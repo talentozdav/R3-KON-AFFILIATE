@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db, verifyPassword } from '../db.js';
 import { AuthenticatedRequest, requireRoles } from '../middleware/auth.js';
-import { ApplicationStatus, AffiliateStatus, CommissionRule } from '../types.js';
+import { ApplicationStatus, AffiliateStatus } from '../types.js';
 import {
   getClientRegistrations,
   updateClientRegistrationStatus,
@@ -10,16 +10,87 @@ import {
   insertClientNote,
   getClientFollowups,
   insertClientFollowup,
+  getAdminOverviewMetrics,
+  getAffiliateApplications,
+  reviewAffiliateApplication,
+  createAffiliate,
+  getAffiliates,
+  updateAffiliateStatus,
+  getReferralLeads,
+  getReferralClicks,
+  createConversion,
+  getConversions,
+  verifyConversion,
+  getCommissions,
+  generateCommission,
+  actionCommission,
+  getCommissionRules,
+  createCommissionRule,
+  toggleCommissionRuleStatus,
+  getPayouts,
+  preparePayoutBatch,
+  recordPayoutPayment,
+  getAuditLogs,
+  recordAuditLog,
+  bootstrapAdminUser,
   supabaseAdmin,
   supabasePublic
 } from '../supabase.js';
-import { sendClientAccountInvitation } from '../services/mailer.js';
+import { sendClientAccountInvitation, sendAffiliateApprovalActivation } from '../services/mailer.js';
 
 export const adminRouter = Router();
 
 // ==============================================================================
-// PUBLIC / UNPROTECTED ADMIN AUTH ENDPOINTS
+// PUBLIC / UNPROTECTED ADMIN AUTH & BOOTSTRAP ENDPOINTS
 // ==============================================================================
+
+/**
+ * POST /api/admin/bootstrap
+ * Secure endpoint to bootstrap or reset initial administrator account in Supabase
+ */
+adminRouter.post('/bootstrap', async (req: Request, res: Response) => {
+  const secretKey = (req.headers['x-admin-bootstrap-key'] as string) || req.body?.bootstrapKey;
+  const expectedKey = process.env.ADMIN_BOOTSTRAP_KEY || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  // Protect against arbitrary access
+  if (!expectedKey || !secretKey || secretKey !== expectedKey) {
+    return res.status(401).json({
+      error: 'Unauthorized Bootstrap',
+      message: 'Valid administrative bootstrap key or Supabase secret key required in X-Admin-Bootstrap-Key header.'
+    });
+  }
+
+  const { email, password, fullName, role } = req.body;
+  if (!email || !password || !fullName) {
+    return res.status(400).json({ error: 'Email, password, and full name are required.' });
+  }
+
+  try {
+    const result = await bootstrapAdminUser({
+      email,
+      password,
+      fullName,
+      role: role || 'super_admin'
+    });
+
+    await recordAuditLog(
+      email,
+      role || 'super_admin',
+      'ADMIN_BOOTSTRAP_PROVISIONED',
+      'profiles',
+      result.userId,
+      `Bootstrapped administrative user for ${email} with role ${role || 'super_admin'}`,
+      req.ip
+    );
+
+    return res.status(201).json({
+      message: 'Administrative user successfully provisioned in Supabase.',
+      ...result
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Bootstrap failed', message: err.message });
+  }
+});
 
 /**
  * POST /api/admin/login
@@ -64,6 +135,16 @@ adminRouter.post('/login', async (req: Request, res: Response) => {
           });
         }
 
+        await recordAuditLog(
+          normalizedEmail,
+          role,
+          'ADMIN_LOGIN',
+          'auth',
+          data.user.id,
+          `Admin Supabase login verified for role: ${role}`,
+          req.ip
+        );
+
         return res.json({
           success: true,
           token: data.session?.access_token || normalizedEmail,
@@ -81,7 +162,7 @@ adminRouter.post('/login', async (req: Request, res: Response) => {
     }
   }
 
-  // 2. Memory database fallback
+  // 2. Memory database fallback (for local development only)
   const user = db.users.find(u => u.email.toLowerCase() === normalizedEmail);
   if (!user) {
     return res.status(401).json({
@@ -108,13 +189,13 @@ adminRouter.post('/login', async (req: Request, res: Response) => {
     }
   }
 
-  db.recordAuditLog(
+  await recordAuditLog(
     user.email,
     user.role,
     'ADMIN_LOGIN',
     'auth',
     user.id,
-    `Admin login verified for role: ${user.role}`,
+    `Admin memory login verified for role: ${user.role}`,
     req.ip
   );
 
@@ -161,40 +242,13 @@ adminRouter.get('/verify-session', (req: AuthenticatedRequest, res: Response) =>
 adminRouter.use(requireRoles('super_admin', 'affiliate_manager', 'finance_manager'));
 
 // 1. Program Overview Metrics
-adminRouter.get('/overview', (req: AuthenticatedRequest, res: Response) => {
-  const pendingApps = db.applications.filter(a => a.status === 'SUBMITTED' || a.status === 'UNDER_REVIEW').length;
-  const activeAffiliatesCount = db.affiliates.filter(a => a.status === 'active').length;
-  const totalLeads = db.leads.length;
-  const verifiedConversions = db.conversions.filter(c => c.verificationStatus === 'verified').length;
-  const pendingConversions = db.conversions.filter(c => c.verificationStatus === 'pending_verification').length;
-  
-  const pendingCommissionAmount = db.commissions
-    .filter(c => c.status === 'pending')
-    .reduce((s, c) => s + c.commissionAmount, 0);
-
-  const approvedUnpaidCommissionAmount = db.commissions
-    .filter(c => c.status === 'approved')
-    .reduce((s, c) => s + c.commissionAmount, 0);
-
-  const totalPaidOut = db.payouts
-    .filter(p => p.status === 'paid')
-    .reduce((s, p) => s + p.amount, 0);
-
-  res.json({
-    metrics: {
-      pendingApplications: pendingApps,
-      totalApplications: db.applications.length,
-      activeAffiliates: activeAffiliatesCount,
-      totalAffiliates: db.affiliates.length,
-      totalLeads,
-      verifiedConversions,
-      pendingConversions,
-      pendingCommissionApproval: pendingCommissionAmount,
-      approvedUnpaidCommissions: approvedUnpaidCommissionAmount,
-      totalPaidOutCommissions: totalPaidOut,
-      activeCommissionRulesCount: db.commissionRules.filter(r => r.status === 'active').length
-    }
-  });
+adminRouter.get('/overview', async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const metrics = await getAdminOverviewMetrics();
+    res.json({ metrics });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to calculate overview metrics', message: err.message });
+  }
 });
 
 // 2. Client CRM Registrations
@@ -214,7 +268,7 @@ adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin',
 
   try {
     await updateClientRegistrationStatus(id, status);
-    db.recordAuditLog(
+    await recordAuditLog(
       req.user!.email,
       req.user!.role,
       'CLIENT_REGISTRATION_STATUS_UPDATED',
@@ -232,45 +286,49 @@ adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin',
 // Resend client account invitation
 adminRouter.post('/client-registrations/:id/resend-invite', requireRoles('super_admin', 'affiliate_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
-  const registrations = await getClientRegistrations();
-  const reg = registrations.find(r => r.id === id);
+  try {
+    const registrations = await getClientRegistrations();
+    const reg = registrations.find(r => r.id === id);
 
-  if (!reg) {
-    return res.status(404).json({ error: 'Registration record not found.' });
+    if (!reg) {
+      return res.status(404).json({ error: 'Registration record not found.' });
+    }
+
+    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon.vercel.app';
+    const invitationUrl = `${origin}/client-portal?mode=activate&ref=${reg.referenceNumber}&email=${encodeURIComponent(reg.email)}`;
+
+    const emailResult = await sendClientAccountInvitation({
+      email: reg.email,
+      fullName: reg.fullName,
+      invitationUrl,
+      referenceNumber: reg.referenceNumber
+    });
+
+    await updateClientRegistrationInvitation(
+      reg.id,
+      emailResult.success ? 'sent' : 'failed',
+      emailResult.error
+    );
+
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'CLIENT_INVITATION_RESENT',
+      'client_registrations',
+      id,
+      `Resent portal invitation to ${reg.email} [${emailResult.success ? 'Success' : 'Failed'}]`,
+      req.ip
+    );
+
+    res.json({
+      success: emailResult.success,
+      message: emailResult.success
+        ? `Invitation re-dispatched successfully to ${reg.email}.`
+        : `Failed to deliver invitation: ${emailResult.error}`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to resend invite', message: err.message });
   }
-
-  const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon.vercel.app';
-  const invitationUrl = `${origin}/client-portal?mode=activate&ref=${reg.referenceNumber}&email=${encodeURIComponent(reg.email)}`;
-
-  const emailResult = await sendClientAccountInvitation({
-    email: reg.email,
-    fullName: reg.fullName,
-    invitationUrl,
-    referenceNumber: reg.referenceNumber
-  });
-
-  await updateClientRegistrationInvitation(
-    reg.id,
-    emailResult.success ? 'sent' : 'failed',
-    emailResult.error
-  );
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'CLIENT_INVITATION_RESENT',
-    'client_registrations',
-    id,
-    `Resent portal invitation to ${reg.email} [${emailResult.success ? 'Success' : 'Failed'}]`,
-    req.ip
-  );
-
-  res.json({
-    success: emailResult.success,
-    message: emailResult.success
-      ? `Invitation re-dispatched successfully to ${reg.email}.`
-      : `Failed to deliver invitation: ${emailResult.error}`
-  });
 });
 
 // Client Staff Notes
@@ -299,7 +357,7 @@ adminRouter.post('/client-notes', requireRoles('super_admin', 'affiliate_manager
       content: content.trim()
     });
 
-    db.recordAuditLog(
+    await recordAuditLog(
       req.user!.email,
       req.user!.role,
       'CLIENT_NOTE_ADDED',
@@ -349,14 +407,17 @@ adminRouter.post('/client-followups', requireRoles('super_admin', 'affiliate_man
 });
 
 // 3. Applications Management
-adminRouter.get('/applications', (_req: AuthenticatedRequest, res: Response) => {
-  res.json({
-    applications: db.applications
-  });
+adminRouter.get('/applications', async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const applications = await getAffiliateApplications();
+    res.json({ applications });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch affiliate applications', message: err.message });
+  }
 });
 
 // Review Application (Update status)
-adminRouter.post('/applications/:id/review', requireRoles('super_admin', 'affiliate_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/applications/:id/review', requireRoles('super_admin', 'affiliate_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { status, statusNotes } = req.body as { status: ApplicationStatus; statusNotes?: string };
 
@@ -365,99 +426,150 @@ adminRouter.post('/applications/:id/review', requireRoles('super_admin', 'affili
     return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
   }
 
-  const app = db.applications.find(a => a.id === id);
-  if (!app) {
-    return res.status(404).json({ error: 'Application not found' });
+  try {
+    const updated = await reviewAffiliateApplication(id, status, statusNotes, req.user!.fullName);
+
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'APPLICATION_REVIEWED',
+      'application',
+      updated.id,
+      `Application ${updated.referenceNumber} status changed to ${status}. Notes: ${statusNotes || 'None'}`,
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      message: `Application ${updated.referenceNumber} updated to ${status}.`,
+      application: updated
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to review application', message: err.message });
   }
-
-  const prevStatus = app.status;
-  app.status = status;
-  app.statusNotes = statusNotes || app.statusNotes;
-  app.reviewedBy = req.user!.fullName;
-  app.reviewedAt = new Date().toISOString();
-  app.updatedAt = new Date().toISOString();
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'APPLICATION_REVIEWED',
-    'application',
-    app.id,
-    `Application ${app.referenceNumber} status changed from ${prevStatus} to ${status}. Notes: ${statusNotes || 'None'}`,
-    req.ip
-  );
-
-  res.json({
-    success: true,
-    message: `Application ${app.referenceNumber} updated to ${status}.`,
-    application: app
-  });
 });
 
 // Activate Approved Application into an Active Affiliate
-adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affiliate_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affiliate_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { customCode, approvedRatePercent } = req.body;
 
-  const app = db.applications.find(a => a.id === id);
-  if (!app) {
-    return res.status(404).json({ error: 'Application not found' });
+  try {
+    const apps = await getAffiliateApplications();
+    const app = apps.find(a => a.id === id);
+    if (!app) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (app.status !== 'APPROVED') {
+      return res.status(400).json({ error: `Application must be in APPROVED status prior to activation. Current status: ${app.status}` });
+    }
+
+    const affiliates = await getAffiliates();
+    const existingAffiliate = affiliates.find(a => a.email.toLowerCase() === app.email.toLowerCase());
+    if (existingAffiliate) {
+      return res.status(400).json({ error: 'An active affiliate profile already exists for this candidate.' });
+    }
+
+    const referralCode = customCode ? customCode.trim().toUpperCase() : `${app.fullName.split(' ').pop()?.toUpperCase() || 'PARTNER'}-R3`;
+    let userId = `usr_${Date.now()}`;
+
+    // If Supabase Auth is enabled, create or retrieve user in Supabase
+    if (supabaseAdmin) {
+      try {
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+        const existingAuth = listData?.users?.find(u => u.email?.toLowerCase() === app.email.toLowerCase());
+        if (existingAuth) {
+          userId = existingAuth.id;
+          await supabaseAdmin.auth.admin.updateUserById(userId, {
+            user_metadata: { role: 'affiliate', full_name: app.fullName }
+          });
+        } else {
+          const tempPassword = `R3Affiliate!${Math.floor(100000 + Math.random() * 900000)}`;
+          const { data: newAuth } = await supabaseAdmin.auth.admin.createUser({
+            email: app.email.toLowerCase(),
+            password: tempPassword,
+            email_confirm: true,
+            user_metadata: { role: 'affiliate', full_name: app.fullName }
+          });
+          if (newAuth?.user) {
+            userId = newAuth.user.id;
+          }
+        }
+
+        // Upsert profile
+        await supabaseAdmin.from('profiles').upsert({
+          id: userId,
+          email: app.email.toLowerCase(),
+          full_name: app.fullName,
+          role: 'affiliate',
+          status: 'active'
+        });
+      } catch (authErr: any) {
+        console.warn('[Admin Activation] Auth link note:', authErr.message);
+      }
+    }
+
+    const newAffiliate = await createAffiliate({
+      userId,
+      fullName: app.fullName,
+      email: app.email,
+      businessName: app.businessName,
+      referralCode,
+      approvedRatePercent: approvedRatePercent ? Number(approvedRatePercent) : 10.0
+    });
+
+    // Mark application activated
+    if (supabaseAdmin) {
+      await supabaseAdmin
+        .from('affiliate_applications')
+        .update({ activated_affiliate_id: newAffiliate.id, updated_at: new Date().toISOString() })
+        .eq('id', app.id);
+    }
+
+    // Dispatch welcome / activation notification
+    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon.vercel.app';
+    sendAffiliateApprovalActivation({
+      email: app.email,
+      fullName: app.fullName,
+      referralCode,
+      approvedRatePercent: newAffiliate.approvedRatePercent,
+      loginUrl: `${origin}/affiliate/portal?mode=login`,
+      referenceNumber: app.referenceNumber
+    }).catch(err => console.warn('[Admin Activation] Email notification error:', err.message));
+
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'AFFILIATE_ACTIVATED',
+      'affiliate',
+      newAffiliate.id,
+      `Activated affiliate ${newAffiliate.affiliateNumber} (${app.fullName}) with code ${referralCode} and rate ${newAffiliate.approvedRatePercent}%`,
+      req.ip
+    );
+
+    res.status(201).json({
+      success: true,
+      message: `Affiliate partner successfully activated: ${newAffiliate.affiliateNumber}`,
+      affiliate: newAffiliate
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to activate affiliate', message: err.message });
   }
-
-  if (app.status !== 'APPROVED') {
-    return res.status(400).json({ error: `Application must be in APPROVED status prior to activation. Current status: ${app.status}` });
-  }
-
-  const existingAffiliate = db.affiliates.find(a => a.email.toLowerCase() === app.email.toLowerCase());
-  if (existingAffiliate) {
-    return res.status(400).json({ error: 'An active affiliate profile already exists for this candidate.' });
-  }
-
-  const affiliateNumber = `R3-AFF-${Math.floor(1000 + Math.random() * 9000)}`;
-  const referralCode = customCode ? customCode.trim().toUpperCase() : `${app.fullName.split(' ').pop()?.toUpperCase() || 'PARTNER'}-R3`;
-
-  const newAffiliate = {
-    id: `aff_${Date.now()}`,
-    affiliateNumber,
-    userId: `usr_${Date.now()}`,
-    fullName: app.fullName,
-    email: app.email,
-    businessName: app.businessName,
-    referralCode,
-    status: 'active' as const,
-    joinedAt: new Date().toISOString(),
-    approvedRatePercent: approvedRatePercent ? Number(approvedRatePercent) : 10.0,
-    totalClicks: 0,
-    uniqueVisitors: 0
-  };
-
-  db.affiliates.unshift(newAffiliate);
-  app.activatedAffiliateId = newAffiliate.id;
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'AFFILIATE_ACTIVATED',
-    'affiliate',
-    newAffiliate.id,
-    `Activated affiliate ${affiliateNumber} (${app.fullName}) with code ${referralCode} and rate ${newAffiliate.approvedRatePercent}%`,
-    req.ip
-  );
-
-  res.status(201).json({
-    success: true,
-    message: `Affiliate partner successfully activated: ${affiliateNumber}`,
-    affiliate: newAffiliate
-  });
 });
 
 // 4. Affiliates List
-adminRouter.get('/affiliates', requireRoles('super_admin', 'affiliate_manager', 'finance_manager'), (_req: AuthenticatedRequest, res: Response) => {
-  res.json({ affiliates: db.affiliates });
+adminRouter.get('/affiliates', requireRoles('super_admin', 'affiliate_manager', 'finance_manager'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const affiliates = await getAffiliates();
+    res.json({ affiliates });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch affiliates', message: err.message });
+  }
 });
 
 // Update Affiliate Status
-adminRouter.post('/affiliates/:id/status', requireRoles('super_admin', 'affiliate_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/affiliates/:id/status', requireRoles('super_admin', 'affiliate_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { status, reason } = req.body as { status: AffiliateStatus; reason?: string };
 
@@ -466,52 +578,58 @@ adminRouter.post('/affiliates/:id/status', requireRoles('super_admin', 'affiliat
     return res.status(400).json({ error: `Invalid affiliate status. Valid options: ${validStatuses.join(', ')}` });
   }
 
-  const affiliate = db.affiliates.find(a => a.id === id);
-  if (!affiliate) {
-    return res.status(404).json({ error: 'Affiliate not found' });
+  try {
+    await updateAffiliateStatus(id, status);
+
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'AFFILIATE_STATUS_CHANGED',
+      'affiliate',
+      id,
+      `Affiliate ${id} status updated to ${status}. Reason: ${reason || 'Governance review'}`,
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      message: `Affiliate ${id} updated to ${status}.`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update affiliate status', message: err.message });
   }
-
-  const prevStatus = affiliate.status;
-  affiliate.status = status;
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'AFFILIATE_STATUS_CHANGED',
-    'affiliate',
-    affiliate.id,
-    `Affiliate ${affiliate.affiliateNumber} status updated from ${prevStatus} to ${status}. Reason: ${reason || 'Governance review'}`,
-    req.ip
-  );
-
-  res.json({
-    success: true,
-    message: `Affiliate ${affiliate.affiliateNumber} updated to ${status}.`,
-    affiliate
-  });
 });
 
 // 5. Referrals & Attributed Inquiries
-adminRouter.get('/referrals', requireRoles('super_admin', 'affiliate_manager'), (_req: AuthenticatedRequest, res: Response) => {
-  res.json({
-    leads: db.leads,
-    clicks: db.clicks
-  });
+adminRouter.get('/referrals', requireRoles('super_admin', 'affiliate_manager'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const [leads, clicks] = await Promise.all([
+      getReferralLeads(),
+      getReferralClicks()
+    ]);
+    res.json({ leads, clicks });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch referral activity', message: err.message });
+  }
 });
 
 // 6. Conversions Management
-adminRouter.get('/conversions', requireRoles('super_admin', 'affiliate_manager', 'finance_manager'), (_req: AuthenticatedRequest, res: Response) => {
-  res.json({ conversions: db.conversions });
+adminRouter.get('/conversions', requireRoles('super_admin', 'affiliate_manager', 'finance_manager'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const conversions = await getConversions();
+    res.json({ conversions });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch conversions', message: err.message });
+  }
 });
 
 // Manual Conversion Verification
-adminRouter.post('/conversions/create', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/conversions/create', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const {
     affiliateId,
     leadId,
     membershipTierOrCategory,
     eligibleSaleAmount,
-    verificationStatus,
     verificationNotes
   } = req.body;
 
@@ -519,274 +637,222 @@ adminRouter.post('/conversions/create', requireRoles('super_admin', 'finance_man
     return res.status(400).json({ error: 'Affiliate ID, category, and eligible amount are required.' });
   }
 
-  const affiliate = db.affiliates.find(a => a.id === affiliateId);
-  if (!affiliate) {
-    return res.status(404).json({ error: 'Affiliate not found' });
+  try {
+    const conversion = await createConversion({
+      affiliateId,
+      leadId: leadId || undefined,
+      membershipTierOrCategory,
+      eligibleSaleAmount: Number(eligibleSaleAmount),
+      verificationNotes: verificationNotes?.trim() || 'Verified against executed contingency contract and bank settlement.',
+      verifiedBy: req.user!.fullName
+    });
+
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'CONVERSION_VERIFIED',
+      'conversion',
+      conversion.id,
+      `Logged verified conversion for $${eligibleSaleAmount} USD attributed to affiliate ${affiliateId}`,
+      req.ip
+    );
+
+    res.status(201).json({
+      success: true,
+      conversion
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to create verified conversion', message: err.message });
   }
-
-  const txRef = `CTX-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-  const now = new Date().toISOString();
-
-  const conversion = {
-    id: `cnv_${Date.now()}`,
-    transactionReference: txRef,
-    affiliateId,
-    leadId: leadId || undefined,
-    membershipTierOrCategory,
-    eligibleSaleAmount: Number(eligibleSaleAmount),
-    currency: 'USD',
-    verificationStatus: (verificationStatus || 'verified') as any,
-    verificationNotes: verificationNotes?.trim() || 'Verified against executed contingency contract and bank settlement.',
-    verifiedBy: req.user!.fullName,
-    verifiedAt: now,
-    transactionDate: now,
-    createdAt: now
-  };
-
-  db.conversions.unshift(conversion);
-
-  if (leadId) {
-    const lead = db.leads.find(l => l.id === leadId);
-    if (lead) {
-      lead.status = 'converted';
-      lead.updatedAt = now;
-    }
-  }
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'CONVERSION_VERIFIED',
-    'conversion',
-    conversion.id,
-    `Logged verified conversion ${txRef} for $${eligibleSaleAmount} USD attributed to ${affiliate.affiliateNumber}`,
-    req.ip
-  );
-
-  res.status(201).json({
-    success: true,
-    conversion
-  });
 });
 
-adminRouter.post('/conversions/:id/verify', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/conversions/:id/verify', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { verificationStatus, verificationNotes } = req.body;
 
-  const conversion = db.conversions.find(c => c.id === id);
-  if (!conversion) {
-    return res.status(404).json({ error: 'Conversion record not found' });
+  try {
+    const conversion = await verifyConversion(
+      id,
+      verificationStatus,
+      verificationNotes,
+      req.user!.fullName
+    );
+
+    res.json({ success: true, conversion });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to verify conversion', message: err.message });
   }
-
-  conversion.verificationStatus = verificationStatus;
-  conversion.verificationNotes = verificationNotes || conversion.verificationNotes;
-  conversion.verifiedBy = req.user!.fullName;
-  conversion.verifiedAt = new Date().toISOString();
-
-  res.json({ success: true, conversion });
 });
 
 // 7. Commissions Management
-adminRouter.get('/commissions', requireRoles('super_admin', 'finance_manager'), (_req: AuthenticatedRequest, res: Response) => {
-  res.json({ commissions: db.commissions });
+adminRouter.get('/commissions', requireRoles('super_admin', 'finance_manager'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const commissions = await getCommissions();
+    res.json({ commissions });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch commissions', message: err.message });
+  }
 });
 
 // Generate Commission from Verified Conversion
-adminRouter.post('/commissions/generate', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/commissions/generate', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { conversionId, ruleId, customRate } = req.body;
 
-  const conversion = db.conversions.find(c => c.id === conversionId);
-  if (!conversion) {
-    return res.status(404).json({ error: 'Verified conversion record not found.' });
+  if (!conversionId) {
+    return res.status(400).json({ error: 'Conversion ID is required.' });
   }
 
-  if (conversion.verificationStatus !== 'verified') {
-    return res.status(400).json({ error: 'Commission can only be generated on VERIFIED conversions.' });
+  try {
+    const newCommission = await generateCommission({
+      conversionId,
+      ruleId,
+      customRate: customRate !== undefined && customRate !== null ? Number(customRate) : undefined,
+      approvedBy: req.user!.fullName
+    });
+
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'COMMISSION_GENERATED',
+      'commission',
+      newCommission.id,
+      `Calculated commission for conversion ${conversionId}: $${newCommission.commission_amount || newCommission.commissionAmount} USD`,
+      req.ip
+    );
+
+    res.status(201).json({
+      success: true,
+      commission: newCommission
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to generate commission', message: err.message });
   }
-
-  const existingCommission = db.commissions.find(c => c.conversionId === conversionId);
-  if (existingCommission) {
-    return res.status(400).json({ error: 'A commission record has already been generated for this transaction reference.' });
-  }
-
-  const affiliate = db.affiliates.find(a => a.id === conversion.affiliateId);
-  if (!affiliate) {
-    return res.status(404).json({ error: 'Associated affiliate record not found.' });
-  }
-
-  let rate = affiliate.approvedRatePercent;
-  if (customRate !== undefined && customRate !== null) {
-    rate = Number(customRate);
-  } else if (ruleId) {
-    const rule = db.commissionRules.find(r => r.id === ruleId && r.status === 'active');
-    if (rule) rate = rule.ratePercent;
-  }
-
-  const commissionAmount = Number(((conversion.eligibleSaleAmount * rate) / 100).toFixed(2));
-  const commissionRef = `COM-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-  const now = new Date().toISOString();
-
-  const newCommission = {
-    id: `com_${Date.now()}`,
-    commissionReference: commissionRef,
-    affiliateId: affiliate.id,
-    conversionId: conversion.id,
-    transactionReference: conversion.transactionReference,
-    eligibleTransactionAmount: conversion.eligibleSaleAmount,
-    appliedCommissionRate: rate,
-    commissionAmount,
-    currency: 'USD',
-    status: 'approved' as const,
-    approvedBy: req.user!.fullName,
-    approvedAt: now,
-    dateRecorded: now
-  };
-
-  db.commissions.unshift(newCommission);
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'COMMISSION_GENERATED',
-    'commission',
-    newCommission.id,
-    `Calculated approved commission ${commissionRef} for $${commissionAmount} USD (${rate}% on $${conversion.eligibleSaleAmount} base) for ${affiliate.affiliateNumber}`,
-    req.ip
-  );
-
-  res.status(201).json({
-    success: true,
-    commission: newCommission
-  });
 });
 
 // Approve or Reverse Commission
-adminRouter.post('/commissions/:id/action', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/commissions/:id/action', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { action, auditReason } = req.body;
 
-  const commission = db.commissions.find(c => c.id === id);
-  if (!commission) {
-    return res.status(404).json({ error: 'Commission not found' });
+  if (action !== 'approve' && action !== 'reverse') {
+    return res.status(400).json({ error: 'Action must be approve or reverse.' });
   }
 
-  if (action === 'approve') {
-    commission.status = 'approved';
-    commission.approvedBy = req.user!.fullName;
-    commission.approvedAt = new Date().toISOString();
-  } else if (action === 'reverse') {
-    commission.status = 'reversed';
-    commission.auditReason = auditReason || 'Reversed by finance audit';
-  }
+  try {
+    const commission = await actionCommission(id, action, auditReason || 'Finance audit verification', req.user!.email);
 
-  res.json({ success: true, commission });
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      action === 'approve' ? 'COMMISSION_APPROVED' : 'COMMISSION_REVERSED',
+      'commission',
+      id,
+      `Commission ${id} ${action}d. Reason: ${auditReason || 'Routine review'}`,
+      req.ip
+    );
+
+    res.json({ success: true, commission });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update commission', message: err.message });
+  }
 });
 
 // Commission Rules Management
-adminRouter.get('/commission-rules', requireRoles('super_admin', 'finance_manager'), (_req: AuthenticatedRequest, res: Response) => {
-  res.json({ rules: db.commissionRules });
+adminRouter.get('/commission-rules', requireRoles('super_admin', 'finance_manager'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const rules = await getCommissionRules();
+    res.json({ rules });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch commission rules', message: err.message });
+  }
 });
 
-adminRouter.post('/commission-rules', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
-  const { name, serviceCategory, ratePercent, effectiveDate, description, status } = req.body;
+adminRouter.post('/commission-rules', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
+  const { name, serviceCategory, ratePercent, description, status } = req.body;
 
   if (!name || !serviceCategory || !ratePercent) {
     return res.status(400).json({ error: 'Rule name, service category, and rate percent are required.' });
   }
 
-  const newRule: CommissionRule = {
-    id: `rule_${Date.now()}`,
-    name: name.trim(),
-    serviceCategory: serviceCategory.trim(),
-    ratePercent: Number(ratePercent),
-    status: status || 'inactive',
-    effectiveDate: effectiveDate || new Date().toISOString().split('T')[0],
-    approvedBy: req.user!.fullName,
-    approvedAt: new Date().toISOString(),
-    description: description?.trim()
-  };
+  try {
+    const rule = await createCommissionRule({
+      name: name.trim(),
+      serviceCategory: serviceCategory.trim(),
+      ratePercent: Number(ratePercent),
+      status: status || 'inactive',
+      description: description?.trim() || '',
+      approvedBy: req.user!.fullName
+    });
 
-  db.commissionRules.unshift(newRule);
-  res.status(201).json({ success: true, rule: newRule });
+    res.status(201).json({ success: true, rule });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to create commission rule', message: err.message });
+  }
 });
 
-adminRouter.post('/commission-rules/:id/status', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/commission-rules/:id/status', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  const rule = db.commissionRules.find(r => r.id === id);
-  if (!rule) {
-    return res.status(404).json({ error: 'Rule not found' });
+  if (status !== 'active' && status !== 'inactive') {
+    return res.status(400).json({ error: 'Status must be active or inactive.' });
   }
 
-  rule.status = status;
-  res.json({ success: true, rule });
+  try {
+    const rule = await toggleCommissionRuleStatus(id, status);
+    res.json({ success: true, rule });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update rule status', message: err.message });
+  }
 });
 
 // 8. Payout Management
-adminRouter.get('/payouts', requireRoles('super_admin', 'finance_manager'), (_req: AuthenticatedRequest, res: Response) => {
-  res.json({ payouts: db.payouts });
+adminRouter.get('/payouts', requireRoles('super_admin', 'finance_manager'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const payouts = await getPayouts();
+    res.json({ payouts });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch payouts', message: err.message });
+  }
 });
 
 // Prepare Payout Batch
-adminRouter.post('/payouts/prepare', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/payouts/prepare', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { affiliateId, payoutPeriod, paymentMethod } = req.body;
 
-  const affiliate = db.affiliates.find(a => a.id === affiliateId);
-  if (!affiliate) {
-    return res.status(404).json({ error: 'Affiliate not found' });
+  if (!affiliateId) {
+    return res.status(400).json({ error: 'Affiliate ID is required.' });
   }
 
-  const approvedCommissions = db.commissions.filter(
-    c => c.affiliateId === affiliateId && c.status === 'approved' && !c.payoutId
-  );
+  try {
+    const payout = await preparePayoutBatch({
+      affiliateId,
+      payoutPeriod,
+      paymentMethod,
+      preparedBy: req.user!.fullName
+    });
 
-  if (approvedCommissions.length === 0) {
-    return res.status(400).json({ error: 'No approved unpaid commissions eligible for payout.' });
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'PAYOUT_BATCH_PREPARED',
+      'payout',
+      payout.id,
+      `Prepared scheduled payout batch for affiliate ${affiliateId}: $${payout.amount} USD`,
+      req.ip
+    );
+
+    res.status(201).json({
+      success: true,
+      payout
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to prepare payout batch', message: err.message });
   }
-
-  const totalAmount = approvedCommissions.reduce((sum, c) => sum + c.commissionAmount, 0);
-  const payoutRef = `PAY-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-  const now = new Date().toISOString();
-
-  const newPayout = {
-    id: `pay_${Date.now()}`,
-    payoutReference: payoutRef,
-    affiliateId,
-    payoutPeriod: payoutPeriod || `Batch ${new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`,
-    amount: totalAmount,
-    currency: 'USD',
-    status: 'scheduled' as const,
-    paymentMethod: paymentMethod || 'SWIFT Wire Transfer',
-    commissionIds: approvedCommissions.map(c => c.id),
-    preparedBy: req.user!.fullName,
-    createdAt: now
-  };
-
-  db.payouts.unshift(newPayout);
-
-  approvedCommissions.forEach(c => {
-    c.payoutId = newPayout.id;
-  });
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'PAYOUT_BATCH_PREPARED',
-    'payout',
-    newPayout.id,
-    `Prepared scheduled payout batch ${payoutRef} for $${totalAmount} USD across ${approvedCommissions.length} commissions for ${affiliate.affiliateNumber}`,
-    req.ip
-  );
-
-  res.status(201).json({
-    success: true,
-    payout: newPayout
-  });
 });
 
 // Record completed payout
-adminRouter.post('/payouts/:id/record-payment', requireRoles('super_admin', 'finance_manager'), (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post('/payouts/:id/record-payment', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { paymentReference, notes } = req.body;
 
@@ -794,41 +860,40 @@ adminRouter.post('/payouts/:id/record-payment', requireRoles('super_admin', 'fin
     return res.status(400).json({ error: 'Valid banking/wire payment reference is required.' });
   }
 
-  const payout = db.payouts.find(p => p.id === id);
-  if (!payout) {
-    return res.status(404).json({ error: 'Payout batch not found' });
+  try {
+    const payout = await recordPayoutPayment(
+      id,
+      paymentReference.trim(),
+      notes?.trim(),
+      req.user!.fullName
+    );
+
+    await recordAuditLog(
+      req.user!.email,
+      req.user!.role,
+      'PAYOUT_DISBURSED',
+      'payout',
+      id,
+      `Settled payout ${id} ($${payout.amount} USD). Bank Reference: ${paymentReference}`,
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      message: 'Payout recorded as paid.',
+      payout
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to record payout payment', message: err.message });
   }
-
-  payout.status = 'paid';
-  payout.paymentReference = paymentReference.trim();
-  payout.notes = notes?.trim() || payout.notes;
-  payout.processedBy = req.user!.fullName;
-  payout.processedAt = new Date().toISOString();
-
-  db.commissions.forEach(c => {
-    if (payout.commissionIds.includes(c.id)) {
-      c.status = 'paid';
-    }
-  });
-
-  db.recordAuditLog(
-    req.user!.email,
-    req.user!.role,
-    'PAYOUT_DISBURSED',
-    'payout',
-    payout.id,
-    `Completed payout ${payout.payoutReference} ($${payout.amount} USD). Payment Ref: ${paymentReference}`,
-    req.ip
-  );
-
-  res.json({
-    success: true,
-    message: `Payout ${payout.payoutReference} recorded as paid.`,
-    payout
-  });
 });
 
 // 9. Audit Logs
-adminRouter.get('/audit-logs', (_req: AuthenticatedRequest, res: Response) => {
-  res.json({ auditLogs: db.auditLogs });
+adminRouter.get('/audit-logs', async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const auditLogs = await getAuditLogs();
+    res.json({ auditLogs });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch audit logs', message: err.message });
+  }
 });

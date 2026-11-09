@@ -1,0 +1,466 @@
+-- ==============================================================================
+-- R3 CONTINGENCIES — COMPLETE IDEMPOTENT PRODUCTION DATABASE SCHEMA
+-- Target Supabase Project: btyrmnklklxgqoxdhetd (https://btyrmnklklxgqoxdhetd.supabase.co)
+-- Execution: Run this entire script in Supabase Dashboard -> SQL Editor -> New Query -> Run
+-- ==============================================================================
+
+-- 1. EXTENSIONS
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 2. ENUMS
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+    CREATE TYPE user_role AS ENUM ('super_admin', 'affiliate_manager', 'finance_manager', 'compliance_officer', 'affiliate', 'client');
+  ELSE
+    BEGIN
+      ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'compliance_officer';
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'client';
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'application_status') THEN
+    CREATE TYPE application_status AS ENUM ('SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED', 'INFORMATION_REQUESTED');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'affiliate_status') THEN
+    CREATE TYPE affiliate_status AS ENUM ('active', 'suspended', 'terminated', 'pending');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'conversion_status') THEN
+    CREATE TYPE conversion_status AS ENUM ('verified', 'pending_verification', 'reversed');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'commission_status') THEN
+    CREATE TYPE commission_status AS ENUM ('approved', 'pending', 'reversed', 'paid');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payout_status') THEN
+    CREATE TYPE payout_status AS ENUM ('scheduled', 'processing', 'paid', 'cancelled');
+  END IF;
+END $$;
+
+-- 3. PROFILES / USERS TABLE
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL UNIQUE,
+  full_name TEXT NOT NULL,
+  role user_role NOT NULL DEFAULT 'affiliate',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'pending_activation')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 4. CLIENT PROFILES TABLE (Mapped to auth.users for clients)
+CREATE TABLE IF NOT EXISTS public.client_profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL UNIQUE,
+  full_name TEXT NOT NULL,
+  phone TEXT,
+  company TEXT,
+  country TEXT NOT NULL DEFAULT 'International',
+  membership_tier TEXT NOT NULL DEFAULT 'Executive Contingency Retainer',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'pending_activation')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 5. CLIENT REGISTRATIONS TABLE
+CREATE TABLE IF NOT EXISTS public.client_registrations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reference_number TEXT NOT NULL UNIQUE,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT,
+  company TEXT,
+  country TEXT NOT NULL,
+  service_category TEXT NOT NULL DEFAULT 'Executive Contingency Retainer',
+  requirements_brief TEXT,
+  referral_code TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_REVIEW', 'APPROVED', 'DECLINED', 'ARCHIVED')),
+  invitation_status TEXT NOT NULL DEFAULT 'pending' CHECK (invitation_status IN ('pending', 'sent', 'failed', 'accepted', 'expired')),
+  invitation_sent_at TIMESTAMPTZ,
+  invitation_error TEXT,
+  account_activated_at TIMESTAMPTZ,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 6. CLIENT INQUIRIES & ADVISORY BRIEFS
+CREATE TABLE IF NOT EXISTS public.client_inquiries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reference_number TEXT NOT NULL UNIQUE,
+  client_id UUID REFERENCES public.client_profiles(id) ON DELETE SET NULL,
+  registration_id UUID REFERENCES public.client_registrations(id) ON DELETE SET NULL,
+  client_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT,
+  organization TEXT,
+  country TEXT NOT NULL DEFAULT 'International',
+  service_interest TEXT NOT NULL,
+  brief_summary TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'under_review', 'assigned', 'resolved', 'closed')),
+  priority TEXT NOT NULL DEFAULT 'high' CHECK (priority IN ('urgent', 'high', 'standard')),
+  assigned_coordinator TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 7. CLIENT CONFIDENTIAL STAFF NOTES
+CREATE TABLE IF NOT EXISTS public.client_notes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  registration_id UUID REFERENCES public.client_registrations(id) ON DELETE CASCADE,
+  client_id UUID REFERENCES public.client_profiles(id) ON DELETE SET NULL,
+  author_email TEXT NOT NULL,
+  author_name TEXT NOT NULL,
+  note_type TEXT NOT NULL DEFAULT 'general' CHECK (note_type IN ('general', 'compliance', 'security', 'billing', 'operational')),
+  content TEXT NOT NULL,
+  is_confidential BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 8. CLIENT SCHEDULED FOLLOW-UPS
+CREATE TABLE IF NOT EXISTS public.client_followups (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  registration_id UUID REFERENCES public.client_registrations(id) ON DELETE CASCADE,
+  client_id UUID REFERENCES public.client_profiles(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  due_date DATE NOT NULL,
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'cancelled')),
+  assigned_to TEXT NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  completed_at TIMESTAMPTZ
+);
+
+-- 9. AFFILIATE APPLICATIONS TABLE
+CREATE TABLE IF NOT EXISTS public.affiliate_applications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reference_number TEXT NOT NULL UNIQUE,
+  full_name TEXT NOT NULL,
+  applicant_type TEXT NOT NULL CHECK (applicant_type IN ('Individual', 'Business')),
+  business_name TEXT,
+  email TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  country TEXT NOT NULL,
+  partnership_category TEXT NOT NULL,
+  industryBackground TEXT NOT NULL DEFAULT '',
+  audienceDescription TEXT NOT NULL DEFAULT '',
+  partnershipObjectives TEXT NOT NULL DEFAULT '',
+  industry_background TEXT,
+  audience_description TEXT,
+  partnership_objectives TEXT,
+  additional_info TEXT,
+  terms_accepted BOOLEAN NOT NULL DEFAULT FALSE,
+  privacy_accepted BOOLEAN NOT NULL DEFAULT FALSE,
+  status application_status NOT NULL DEFAULT 'SUBMITTED',
+  status_notes TEXT,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  activated_affiliate_id UUID,
+  submitted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 10. AFFILIATES TABLE
+CREATE TABLE IF NOT EXISTS public.affiliates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  affiliate_number TEXT NOT NULL UNIQUE,
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  business_name TEXT,
+  referral_code TEXT NOT NULL UNIQUE,
+  status affiliate_status NOT NULL DEFAULT 'active',
+  approved_rate_percent NUMERIC(5,2) NOT NULL DEFAULT 10.00 CHECK (approved_rate_percent >= 0 AND approved_rate_percent <= 100),
+  total_clicks INTEGER NOT NULL DEFAULT 0,
+  unique_visitors INTEGER NOT NULL DEFAULT 0,
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 11. REFERRAL CLICKS TABLE
+CREATE TABLE IF NOT EXISTS public.referral_clicks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  referral_code TEXT NOT NULL,
+  affiliate_id UUID NOT NULL REFERENCES public.affiliates(id) ON DELETE CASCADE,
+  visitor_hash TEXT NOT NULL,
+  is_unique BOOLEAN NOT NULL DEFAULT FALSE,
+  referer TEXT,
+  user_agent TEXT,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 12. REFERRAL LEADS TABLE
+CREATE TABLE IF NOT EXISTS public.referral_leads (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  affiliate_id UUID NOT NULL REFERENCES public.affiliates(id) ON DELETE CASCADE,
+  referral_code TEXT NOT NULL,
+  client_identifier TEXT NOT NULL,
+  client_type TEXT NOT NULL CHECK (client_type IN ('Individual', 'Corporate', 'Institutional')),
+  region TEXT NOT NULL,
+  service_category TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'in_review' CHECK (status IN ('in_review', 'engaged', 'qualified', 'converted', 'disqualified')),
+  estimated_value NUMERIC(12,2),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 13. CONVERSIONS TABLE
+CREATE TABLE IF NOT EXISTS public.conversions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_reference TEXT NOT NULL UNIQUE,
+  affiliate_id UUID NOT NULL REFERENCES public.affiliates(id) ON DELETE RESTRICT,
+  lead_id UUID REFERENCES public.referral_leads(id) ON DELETE SET NULL,
+  membership_tier_or_category TEXT NOT NULL,
+  eligible_sale_amount NUMERIC(12,2) NOT NULL CHECK (eligible_sale_amount > 0),
+  currency TEXT NOT NULL DEFAULT 'USD',
+  verification_status conversion_status NOT NULL DEFAULT 'pending_verification',
+  verification_notes TEXT,
+  verified_by TEXT,
+  verified_at TIMESTAMPTZ,
+  transaction_date TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 14. COMMISSION RULES TABLE
+CREATE TABLE IF NOT EXISTS public.commission_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  service_category TEXT NOT NULL,
+  rate_percent NUMERIC(5,2) NOT NULL CHECK (rate_percent > 0 AND rate_percent <= 100),
+  status TEXT NOT NULL DEFAULT 'inactive' CHECK (status IN ('active', 'inactive', 'draft')),
+  effective_date DATE NOT NULL,
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+  description TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 15. COMMISSIONS TABLE
+CREATE TABLE IF NOT EXISTS public.commissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  commission_reference TEXT NOT NULL UNIQUE,
+  affiliate_id UUID NOT NULL REFERENCES public.affiliates(id) ON DELETE RESTRICT,
+  conversion_id UUID NOT NULL REFERENCES public.conversions(id) ON DELETE RESTRICT,
+  transaction_reference TEXT NOT NULL,
+  eligible_transaction_amount NUMERIC(12,2) NOT NULL CHECK (eligible_transaction_amount > 0),
+  applied_commission_rate NUMERIC(5,2) NOT NULL CHECK (applied_commission_rate >= 0),
+  commission_amount NUMERIC(12,2) NOT NULL CHECK (commission_amount >= 0),
+  currency TEXT NOT NULL DEFAULT 'USD',
+  status commission_status NOT NULL DEFAULT 'pending',
+  payout_id UUID,
+  audit_reason TEXT,
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+  date_recorded TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 16. PAYOUTS TABLE
+CREATE TABLE IF NOT EXISTS public.payouts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  payout_reference TEXT NOT NULL UNIQUE,
+  affiliate_id UUID NOT NULL REFERENCES public.affiliates(id) ON DELETE RESTRICT,
+  payout_period TEXT NOT NULL,
+  amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  currency TEXT NOT NULL DEFAULT 'USD',
+  status payout_status NOT NULL DEFAULT 'scheduled',
+  payment_method TEXT NOT NULL,
+  payment_reference TEXT,
+  notes TEXT,
+  prepared_by TEXT NOT NULL,
+  processed_by TEXT,
+  processed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 17. AUDIT LOGS TABLE
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  action TEXT NOT NULL,
+  actor_email TEXT NOT NULL,
+  actor_role user_role NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  details TEXT NOT NULL,
+  ip_address TEXT,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 18. INDEXES
+CREATE INDEX IF NOT EXISTS idx_applications_email ON public.affiliate_applications(email);
+CREATE INDEX IF NOT EXISTS idx_applications_status ON public.affiliate_applications(status);
+CREATE INDEX IF NOT EXISTS idx_affiliates_code ON public.affiliates(referral_code);
+CREATE INDEX IF NOT EXISTS idx_affiliates_user_id ON public.affiliates(user_id);
+CREATE INDEX IF NOT EXISTS idx_referral_clicks_code ON public.referral_clicks(referral_code);
+CREATE INDEX IF NOT EXISTS idx_leads_affiliate ON public.referral_leads(affiliate_id);
+CREATE INDEX IF NOT EXISTS idx_conversions_affiliate ON public.conversions(affiliate_id);
+CREATE INDEX IF NOT EXISTS idx_commissions_affiliate ON public.commissions(affiliate_id);
+CREATE INDEX IF NOT EXISTS idx_payouts_affiliate ON public.payouts(affiliate_id);
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON public.audit_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_client_registrations_email ON public.client_registrations(email);
+CREATE INDEX IF NOT EXISTS idx_client_registrations_ref ON public.client_registrations(reference_number);
+CREATE INDEX IF NOT EXISTS idx_client_inquiries_email ON public.client_inquiries(email);
+CREATE INDEX IF NOT EXISTS idx_client_inquiries_client ON public.client_inquiries(client_id);
+CREATE INDEX IF NOT EXISTS idx_client_notes_registration ON public.client_notes(registration_id);
+CREATE INDEX IF NOT EXISTS idx_client_followups_due ON public.client_followups(due_date);
+
+-- 19. FUNCTIONS
+CREATE OR REPLACE FUNCTION public.current_user_role()
+RETURNS user_role AS $$
+  SELECT role FROM public.profiles WHERE id = auth.uid();
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.is_staff()
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles 
+    WHERE id = auth.uid() AND role IN ('super_admin', 'affiliate_manager', 'finance_manager', 'compliance_officer')
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- 20. ROW LEVEL SECURITY (RLS)
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.client_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.client_registrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.client_inquiries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.client_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.client_followups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.affiliate_applications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.affiliates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.referral_clicks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.referral_leads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.commission_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.commissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payouts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+
+-- Staff & Users RLS policies
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+CREATE POLICY "Users can view own profile" ON public.profiles
+  FOR SELECT USING (id = auth.uid() OR public.is_staff());
+
+DROP POLICY IF EXISTS "Admins can update profiles" ON public.profiles;
+CREATE POLICY "Admins can update profiles" ON public.profiles
+  FOR UPDATE USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Clients view own profile" ON public.client_profiles;
+CREATE POLICY "Clients view own profile" ON public.client_profiles
+  FOR SELECT USING (id = auth.uid() OR public.is_staff());
+
+DROP POLICY IF EXISTS "Clients update own profile" ON public.client_profiles;
+CREATE POLICY "Clients update own profile" ON public.client_profiles
+  FOR UPDATE USING (id = auth.uid() OR public.is_staff());
+
+DROP POLICY IF EXISTS "Staff insert client profile" ON public.client_profiles;
+CREATE POLICY "Staff insert client profile" ON public.client_profiles
+  FOR INSERT WITH CHECK (id = auth.uid() OR public.is_staff());
+
+DROP POLICY IF EXISTS "Public can submit applications" ON public.affiliate_applications;
+CREATE POLICY "Public can submit applications" ON public.affiliate_applications
+  FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Admins can view and manage applications" ON public.affiliate_applications;
+CREATE POLICY "Admins can view and manage applications" ON public.affiliate_applications
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Affiliates can view own record" ON public.affiliates;
+CREATE POLICY "Affiliates can view own record" ON public.affiliates
+  FOR SELECT USING (user_id = auth.uid() OR public.is_staff());
+
+DROP POLICY IF EXISTS "Admins manage affiliates" ON public.affiliates;
+CREATE POLICY "Admins manage affiliates" ON public.affiliates
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Affiliates view own leads" ON public.referral_leads;
+CREATE POLICY "Affiliates view own leads" ON public.referral_leads
+  FOR SELECT USING (
+    affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
+    OR public.is_staff()
+  );
+
+DROP POLICY IF EXISTS "Affiliates can submit leads" ON public.referral_leads;
+CREATE POLICY "Affiliates can submit leads" ON public.referral_leads
+  FOR INSERT WITH CHECK (
+    affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
+    OR public.is_staff()
+  );
+
+DROP POLICY IF EXISTS "Affiliates view own conversions" ON public.conversions;
+CREATE POLICY "Affiliates view own conversions" ON public.conversions
+  FOR SELECT USING (
+    affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
+    OR public.is_staff()
+  );
+
+DROP POLICY IF EXISTS "Admins manage conversions" ON public.conversions;
+CREATE POLICY "Admins manage conversions" ON public.conversions
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Affiliates view own commissions" ON public.commissions;
+CREATE POLICY "Affiliates view own commissions" ON public.commissions
+  FOR SELECT USING (
+    affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
+    OR public.is_staff()
+  );
+
+DROP POLICY IF EXISTS "Admins manage commissions" ON public.commissions;
+CREATE POLICY "Admins manage commissions" ON public.commissions
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Affiliates view own payouts" ON public.payouts;
+CREATE POLICY "Affiliates view own payouts" ON public.payouts
+  FOR SELECT USING (
+    affiliate_id IN (SELECT id FROM public.affiliates WHERE user_id = auth.uid())
+    OR public.is_staff()
+  );
+
+DROP POLICY IF EXISTS "Finance managers manage payouts" ON public.payouts;
+CREATE POLICY "Finance managers manage payouts" ON public.payouts
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Admins can view audit logs" ON public.audit_logs;
+CREATE POLICY "Admins can view audit logs" ON public.audit_logs
+  FOR SELECT USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Public can insert registration" ON public.client_registrations;
+CREATE POLICY "Public can insert registration" ON public.client_registrations
+  FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Clients can view own registration" ON public.client_registrations;
+CREATE POLICY "Clients can view own registration" ON public.client_registrations
+  FOR SELECT USING (user_id = auth.uid() OR public.is_staff());
+
+DROP POLICY IF EXISTS "Staff can manage registrations" ON public.client_registrations;
+CREATE POLICY "Staff can manage registrations" ON public.client_registrations
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Public and clients can insert inquiry" ON public.client_inquiries;
+CREATE POLICY "Public and clients can insert inquiry" ON public.client_inquiries
+  FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Clients can view own inquiries" ON public.client_inquiries;
+CREATE POLICY "Clients can view own inquiries" ON public.client_inquiries
+  FOR SELECT USING (
+    (client_id IS NOT NULL AND client_id = auth.uid())
+    OR public.is_staff()
+  );
+
+DROP POLICY IF EXISTS "Staff manage inquiries" ON public.client_inquiries;
+CREATE POLICY "Staff manage inquiries" ON public.client_inquiries
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Staff only notes" ON public.client_notes;
+CREATE POLICY "Staff only notes" ON public.client_notes
+  FOR ALL USING (public.is_staff());
+
+DROP POLICY IF EXISTS "Staff only followups" ON public.client_followups;
+CREATE POLICY "Staff only followups" ON public.client_followups
+  FOR ALL USING (public.is_staff());
