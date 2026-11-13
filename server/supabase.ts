@@ -1092,7 +1092,7 @@ export async function preparePayoutBatch(data: {
         amount: totalAmount,
         currency: 'USD',
         status: 'scheduled',
-        payment_method: data.paymentMethod || 'SWIFT Wire Transfer',
+        payment_method: data.paymentMethod || 'Fedwire (Domestic US)',
         prepared_by: data.preparedBy
       })
       .select()
@@ -1120,7 +1120,7 @@ export async function preparePayoutBatch(data: {
     amount: totalAmount,
     currency: 'USD',
     status: 'scheduled' as const,
-    paymentMethod: data.paymentMethod || 'SWIFT Wire Transfer',
+    paymentMethod: data.paymentMethod || 'Fedwire (Domestic US)',
     preparedBy: data.preparedBy,
     commissionIds: eligible.map((c: any) => c.id),
     createdAt: now

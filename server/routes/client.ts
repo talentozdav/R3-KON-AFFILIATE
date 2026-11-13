@@ -56,7 +56,7 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
     }
 
     if (!country || typeof country !== 'string') {
-      errors.country = 'Country or primary jurisdiction is required.';
+      errors.country = 'U.S. state or primary jurisdiction is required.';
     }
 
     if (!serviceCategory || typeof serviceCategory !== 'string') {
@@ -447,7 +447,7 @@ clientRouter.post('/inquiries', requireAuth, requireRoles('client', 'super_admin
       clientId: user.id,
       clientName: user.fullName,
       email: user.email,
-      country: country || 'International',
+      country: country || 'United States',
       serviceInterest,
       briefSummary: briefSummary ? briefSummary.trim() : undefined,
       priority: priority || 'high'

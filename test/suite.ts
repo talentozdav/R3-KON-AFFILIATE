@@ -21,7 +21,7 @@
  * 16. Manual verified contingency conversion recording
  * 17. Mathematical commission calculation & approval (12.5% on $100k = $12,500)
  * 18. Payout batch preparation & commission locking
- * 19. Payout banking settlement (SWIFT wire reference)
+ * 19. Payout banking settlement (Fedwire US reference)
  * 20. Client CRM staff notes & followups
  * 21. Non-HTML JSON error handling & governance audit logging
  */
@@ -155,10 +155,10 @@ async function runSuite() {
         fullName: 'Director Victoria Vance',
         email: clientEmail,
         phone: '+1 (555) 234-5678',
-        company: 'Vance Sovereign Holdings',
-        country: 'United Kingdom',
+        company: 'Vance Capital Holdings LLC',
+        country: 'United States (Delaware)',
         serviceCategory: 'contingency_management',
-        requirementsBrief: 'Seeking offshore asset protection and international escrow structuring.'
+        requirementsBrief: 'Seeking U.S. Delaware trust asset protection and domestic escrow structuring.'
       };
       const res = await makeRequest(serverUrl, 'POST', '/api/client/register', payload);
       if (res.status !== 201) throw new Error(`Expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
@@ -172,7 +172,7 @@ async function runSuite() {
       const payload = {
         fullName: 'Director Victoria Vance',
         email: clientEmail,
-        country: 'United Kingdom',
+        country: 'United States (Delaware)',
         serviceCategory: 'contingency_management'
       };
       const res = await makeRequest(serverUrl, 'POST', '/api/client/register', payload);
@@ -204,7 +204,7 @@ async function runSuite() {
         serviceInterest: 'contingency_management',
         briefSummary: 'Immediate escrow verification and compliance structuring.',
         priority: 'urgent',
-        country: 'United Kingdom'
+        country: 'United States (Delaware)'
       };
       const res = await makeRequest(serverUrl, 'POST', '/api/client/inquiries', payload, clientAuthHeader);
       if (res.status !== 201) throw new Error(`Expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
@@ -218,11 +218,11 @@ async function runSuite() {
         applicantType: 'Individual',
         email: testEmail,
         phone: '+1 (415) 890-1234',
-        country: 'Switzerland',
+        country: 'United States (New York)',
         partnershipCategory: 'wealth_advisory',
-        industryBackground: 'Private banking and asset management across European jurisdictions over 15 years.',
+        industryBackground: 'Registered U.S. wealth advisory and corporate fiduciary structuring across New York and Delaware over 15 years.',
         audienceDescription: 'Family offices, high-net-worth principals, and private institutional trustees.',
-        partnershipObjectives: 'Introduce qualified international clients requiring complex contingency structuring.',
+        partnershipObjectives: 'Introduce qualified U.S. corporate and private clients requiring complex contingency structuring.',
         termsAccepted: true,
         privacyAccepted: true
       };
@@ -239,11 +239,11 @@ async function runSuite() {
         applicantType: 'Individual',
         email: testEmail,
         phone: '+1 (415) 890-1234',
-        country: 'Switzerland',
+        country: 'United States (New York)',
         partnershipCategory: 'wealth_advisory',
-        industryBackground: 'Private banking and asset management across European jurisdictions over 15 years.',
+        industryBackground: 'Registered U.S. wealth advisory and corporate fiduciary structuring across New York and Delaware over 15 years.',
         audienceDescription: 'Family offices, high-net-worth principals, and private institutional trustees.',
-        partnershipObjectives: 'Introduce qualified international clients requiring complex contingency structuring.',
+        partnershipObjectives: 'Introduce qualified U.S. corporate and private clients requiring complex contingency structuring.',
         termsAccepted: true,
         privacyAccepted: true
       };
@@ -311,7 +311,7 @@ async function runSuite() {
       const res1 = await makeRequest(serverUrl, 'POST', '/api/referrals/track', {
         code: activatedAffiliateCode,
         visitorHash: hash1,
-        referer: 'https://financial-advisors.ch'
+        referer: 'https://us-fiduciary-advisors.com'
       });
       if (res1.status !== 200 || !res1.body.success) throw new Error(`Click tracking failed: ${JSON.stringify(res1.body)}`);
       if (!res1.body.isUnique) throw new Error('Expected first visit to be unique');
@@ -328,13 +328,13 @@ async function runSuite() {
     await runTest('15. Referral inquiry submission attributes lead to affiliate partner', async () => {
       const payload = {
         referralCode: activatedAffiliateCode,
-        clientName: 'Geneva Asset Trust',
-        organization: 'Geneva Asset Trust SA',
-        email: 'compliance@geneva-trust.ch',
-        phone: '+41 22 555 0199',
-        country: 'Switzerland',
+        clientName: 'Delaware Capital Trust',
+        organization: 'Delaware Capital Trust LLC',
+        email: 'compliance@delaware-trust.com',
+        phone: '+1 (212) 555-0199',
+        country: 'United States (Delaware)',
         serviceInterest: 'contingency_management',
-        briefSummary: 'Corporate contingency restructuring for sovereign fund.'
+        briefSummary: 'U.S. corporate contingency restructuring and SEC/FinCEN compliance advisory.'
       };
       const res = await makeRequest(serverUrl, 'POST', '/api/referrals/inquire', payload);
       if (res.status !== 201) throw new Error(`Expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
@@ -392,7 +392,7 @@ async function runSuite() {
       const payload = {
         affiliateId: activatedAffiliateId,
         payoutPeriod: 'Current Month Settlement',
-        paymentMethod: 'SWIFT Wire Transfer'
+        paymentMethod: 'Fedwire (Domestic US)'
       };
       const res = await makeRequest(serverUrl, 'POST', '/api/admin/payouts/prepare', payload, adminAuthHeader);
       if (res.status !== 201) throw new Error(`Expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
@@ -404,8 +404,8 @@ async function runSuite() {
     // 20. Payout Banking Settlement
     await runTest('20. Recording banking wire payment marks payout and linked commissions as paid', async () => {
       const payload = {
-        paymentReference: 'SWIFT-CH-2026-992014',
-        notes: 'Disbursed via Banque Cantonale de Genève.'
+        paymentReference: 'FEDWIRE-NY-2026-992014',
+        notes: 'Disbursed via JPMorgan Chase U.S. Fedwire.'
       };
       const res = await makeRequest(
         serverUrl,

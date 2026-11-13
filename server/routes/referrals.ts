@@ -120,15 +120,15 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
     // 1. If valid affiliate attribution exists, create lead record for affiliate
     if (affiliateId) {
       const maskedClient = organization
-        ? `${organization} (${country || 'International'})`
-        : `Private Principal (${country || 'International'})`;
+        ? `${organization} (${country || 'United States'})`
+        : `Private Principal (${country || 'United States'})`;
 
       const leadRecord = await createReferralLead({
         affiliateId,
         referralCode: cleanCode,
         clientIdentifier: maskedClient,
         clientType: organization ? 'Corporate' : 'Individual',
-        region: country || 'International',
+        region: country || 'United States',
         serviceCategory: serviceInterest,
         notes: `Inquiry submitted via partner link [${cleanCode}]. Brief: ${briefSummary || 'Confidential introduction.'}`
       });
@@ -150,7 +150,7 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
       email: email.trim().toLowerCase(),
       phone: phone ? phone.trim() : undefined,
       organization: organization ? organization.trim() : undefined,
-      country: country ? country.trim() : 'International',
+      country: country ? country.trim() : 'United States',
       serviceInterest,
       briefSummary: briefSummary ? briefSummary.trim() : undefined
     });
@@ -160,7 +160,7 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
       email: email.trim().toLowerCase(),
       phone: phone ? phone.trim() : undefined,
       company: organization ? organization.trim() : undefined,
-      country: country ? country.trim() : 'International',
+      country: country ? country.trim() : 'United States',
       serviceCategory: serviceInterest,
       requirementsBrief: briefSummary ? briefSummary.trim() : undefined,
       referralCode: cleanCode || undefined

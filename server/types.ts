@@ -67,10 +67,10 @@ export interface ReferralLead {
   id: string;
   affiliateId: string;
   referralCode: string;
-  clientIdentifier: string; // Anonymized/redacted for confidentiality e.g. "Private Family Office (Geneva)"
+  clientIdentifier: string; // Anonymized/redacted for confidentiality e.g. "Private Family Office (New York)"
   clientType: 'Individual' | 'Corporate' | 'Institutional';
   region: string;
-  serviceCategory: string; // Executive Contingency, Crisis Coordination, Sovereign Advisory, etc.
+  serviceCategory: string; // Executive Contingency, Crisis Coordination, U.S. Regulatory Advisory, etc.
   status: LeadStatus;
   estimatedValue?: number;
   notes?: string;
@@ -126,7 +126,7 @@ export interface Payout {
   amount: number;
   currency: string;
   status: PayoutStatus;
-  paymentMethod: string; // Wire Transfer, SWIFT, SEPA
+  paymentMethod: string; // Fedwire (Domestic US), ACH Direct Deposit (US), US Domestic Bank Wire
   paymentReference?: string; // e.g. WIRE-R3-884920
   notes?: string;
   commissionIds: string[];

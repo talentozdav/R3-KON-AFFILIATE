@@ -111,7 +111,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [payoutAffiliateId, setPayoutAffiliateId] = useState('');
   const [payoutPeriod, setPayoutPeriod] = useState('November 2026 Cycle');
-  const [payoutMethod, setPayoutMethod] = useState('SWIFT International Wire');
+  const [payoutMethod, setPayoutMethod] = useState('Fedwire (Domestic US)');
 
   // Record Payment Modal state
   const [selectedPayout, setSelectedPayout] = useState<Payout | null>(null);
@@ -324,7 +324,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPayout || !wireRef.trim()) {
-      alert('Wire / SWIFT payment reference is required');
+      alert('Fedwire / ACH / wire payment reference is required');
       return;
     }
 
@@ -1068,7 +1068,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 <div>
                   <h3 className="font-serif text-2xl text-[#0A192F] font-normal">Disbursement Payout Batches</h3>
                   <p className="text-xs text-stone-600 font-light">
-                    Prepare payout batches for approved commissions and record completed international bank transfers.
+                    Prepare payout batches for approved commissions and record completed U.S. Fedwire and ACH transfers.
                   </p>
                 </div>
                 <button
@@ -1253,7 +1253,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                             <div className="text-stone-400 text-[11px] font-sans">{client.phone}</div>
                           </td>
                           <td className="py-3.5 px-4 font-light text-stone-700">
-                            {client.country || 'International'}
+                            {client.country || 'United States'}
                           </td>
                           <td className="py-3.5 px-4">
                             <span className="inline-block px-2 py-0.5 bg-stone-100 border border-stone-200 text-stone-800 text-[11px]">
@@ -1559,7 +1559,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 >
                   <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
                   <option value="Institutional Crisis Advisory">Institutional Crisis Advisory & Rapid Deployment</option>
-                  <option value="Private Sovereign Support">Private Sovereign & Maritime Support</option>
+                  <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
                 </select>
               </div>
 
@@ -1756,7 +1756,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                   type="text"
                   value={ruleName}
                   onChange={(e) => setRuleName(e.target.value)}
-                  placeholder="e.g. Sovereign Fiduciary Special Tier"
+                  placeholder="e.g. U.S. Delaware Fiduciary Special Tier"
                   required
                   className="w-full text-xs px-3.5 py-2 border border-stone-300 bg-white"
                 />
@@ -1774,7 +1774,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                   >
                     <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
                     <option value="Institutional Crisis Advisory">Institutional Crisis Advisory</option>
-                    <option value="Private Sovereign Support">Private Sovereign Support</option>
+                    <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
                   </select>
                 </div>
                 <div>
@@ -1896,10 +1896,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                   onChange={(e) => setPayoutMethod(e.target.value)}
                   className="w-full text-xs px-3.5 py-2 border border-stone-300 bg-white"
                 >
-                  <option value="SWIFT International Wire">SWIFT International Wire</option>
                   <option value="Fedwire (Domestic US)">Fedwire (Domestic US)</option>
-                  <option value="CHAPS / BACS (UK Clearing)">CHAPS / BACS (UK Clearing)</option>
-                  <option value="SEPA Credit Transfer">SEPA Credit Transfer</option>
+                  <option value="ACH Direct Deposit (US)">ACH Direct Deposit (US)</option>
+                  <option value="US Domestic Bank Wire">US Domestic Bank Wire</option>
+                  <option value="SWIFT Wire Transfer">SWIFT Wire Transfer</option>
                 </select>
               </div>
 
@@ -1944,7 +1944,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                   type="text"
                   value={wireRef}
                   onChange={(e) => setWireRef(e.target.value)}
-                  placeholder="e.g. WIRE-R3-994102-CITI"
+                  placeholder="e.g. FEDWIRE-R3-994102-CITI"
                   required
                   className="w-full text-xs font-mono px-3.5 py-2.5 border border-stone-300 bg-white"
                 />
@@ -1992,7 +1992,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
               Client CRM Dossier: {selectedClientForNotes.fullName}
             </h3>
             <p className="text-xs text-stone-600 mb-6 font-light">
-              Ref: <span className="font-mono text-[#0A192F]">{selectedClientForNotes.referenceNumber}</span> · {selectedClientForNotes.email} · {selectedClientForNotes.country || 'International'}
+              Ref: <span className="font-mono text-[#0A192F]">{selectedClientForNotes.referenceNumber}</span> · {selectedClientForNotes.email} · {selectedClientForNotes.country || 'United States'}
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2061,7 +2061,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                     type="text"
                     value={newFollowupNotes}
                     onChange={(e) => setNewFollowupNotes(e.target.value)}
-                    placeholder="e.g. Call regarding sovereign jurisdiction advisory"
+                    placeholder="e.g. Call regarding U.S. corporate compliance advisory"
                     className="w-full text-xs p-2 bg-white border border-stone-300"
                   />
                   <button

@@ -39,7 +39,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
     'Corporate Risk & Fiduciary Practice',
     'Private Client Legal & Tax Advisory',
     'Executive Leadership & Board Consulting',
-    'Sovereign Risk & Geopolitical Advisory',
+    'U.S. Federal & Multi-State Regulatory Advisory',
     'Boutique Financial Advisory',
     'Other Specialized Advisory'
   ];
@@ -52,7 +52,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
     }
 
     if (applicantType === 'Business' && (!businessName.trim() || businessName.trim().length < 2)) {
-      errs.businessName = 'Registered entity or practice name is required.';
+      errs.businessName = 'Registered U.S. entity or LLC/corporate practice name is required.';
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -61,11 +61,11 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
     }
 
     if (!phone.trim() || phone.trim().length < 6) {
-      errs.phone = 'Valid international direct phone number is required.';
+      errs.phone = 'Valid direct U.S. phone number is required.';
     }
 
     if (!country.trim() || country.trim().length < 2) {
-      errs.country = 'Country of registration or practice is required.';
+      errs.country = 'U.S. State / jurisdiction of registration is required.';
     }
 
     if (!industryBackground.trim() || industryBackground.trim().length < 20) {
@@ -321,13 +321,13 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
               {applicantType === 'Business' && (
                 <div>
                   <label className="block text-xs uppercase tracking-wider text-stone-700 font-medium mb-1.5">
-                    Registered Business Name <span className="text-red-500">*</span>
+                    Registered U.S. Business Name <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
                     value={businessName}
                     onChange={(e) => setBusinessName(e.target.value)}
-                    placeholder="e.g. Vance & Partners Advisory Ltd"
+                    placeholder="e.g. Vance & Partners Advisory LLC"
                     className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                   />
                   {fieldErrors.businessName && (
@@ -360,7 +360,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+44 20 7946 0912"
+                  placeholder="+1 (212) 555-0192"
                   className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.phone && (
@@ -370,13 +370,13 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
 
               <div>
                 <label className="block text-xs uppercase tracking-wider text-stone-700 font-medium mb-1.5">
-                  Country of Registration / Residence <span className="text-red-500">*</span>
+                  U.S. State / Jurisdiction of Registration <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   value={country}
                   onChange={(e) => setCountry(e.target.value)}
-                  placeholder="e.g. United Kingdom / Switzerland / Singapore"
+                  placeholder="e.g. Delaware / New York / California (USA)"
                   className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.country && (
@@ -412,7 +412,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   rows={3}
                   value={industryBackground}
                   onChange={(e) => setIndustryBackground(e.target.value)}
-                  placeholder="Summarize your professional experience, past institutional roles, regulatory accreditations, or advisory specialization..."
+                  placeholder="Summarize your U.S. professional experience, FINRA/SEC or state bar standing, corporate registrations, or advisory specialization..."
                   className="w-full text-xs p-3.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.industryBackground && (
@@ -422,13 +422,13 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
 
               <div>
                 <label className="block text-xs uppercase tracking-wider text-stone-700 font-medium mb-1.5">
-                  Audience & Client Network Description <span className="text-red-500">*</span>
+                  Audience &amp; Client Network Description <span className="text-red-500">*</span>
                 </label>
                 <textarea
                   rows={3}
                   value={audienceDescription}
                   onChange={(e) => setAudienceDescription(e.target.value)}
-                  placeholder="Describe the nature of your client base (e.g. UHNW principals, corporate risk officers, maritime operators, overseas expatriate founders)..."
+                  placeholder="Describe the nature of your U.S. client base (e.g. domestic UHNW principals, corporate risk officers, family offices, Delaware trusts)..."
                   className="w-full text-xs p-3.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.audienceDescription && (
@@ -513,7 +513,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   >
                     R3 Privacy & Due Diligence Notice
                   </button>
-                  , authorizing R3 Contingencies to conduct standard institutional compliance checks.
+                  , authorizing R3 Contingencies to conduct U.S. KYC, OFAC sanctions, entity registration, and institutional compliance checks.
                 </span>
               </label>
               {fieldErrors.privacyAccepted && (

@@ -42,7 +42,7 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
         company: organization.trim() || undefined,
         email: email.trim(),
         phone: phone.trim() || undefined,
-        country: country.trim() || 'International',
+        country: country.trim() || 'United States',
         serviceCategory: serviceInterest,
         requirementsBrief: briefSummary.trim() || undefined,
         referralCode: referralCode || undefined
@@ -165,7 +165,7 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                   type="text"
                   value={organization}
                   onChange={(e) => setOrganization(e.target.value)}
-                  placeholder="e.g. Aurelius Capital Holdings"
+                  placeholder="e.g. Aurelius Capital Holdings LLC"
                   className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                 />
               </div>
@@ -186,13 +186,13 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                 </div>
                 <div>
                   <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
-                    Phone / Signal
+                    Phone / Direct Line
                   </label>
                   <input
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+44 20 ..."
+                    placeholder="+1 (212) 555-0140"
                     className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                   />
                 </div>
@@ -208,9 +208,9 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                   className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                 >
                   <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
-                  <option value="Institutional Crisis Advisory">Institutional Crisis Advisory & Rapid Deployment</option>
-                  <option value="Private Sovereign Support">Private Sovereign & Maritime Support</option>
-                  <option value="Multi-Jurisdictional Umbrella">Multi-Jurisdictional Umbrella</option>
+                  <option value="Institutional Crisis Advisory">Institutional Crisis Advisory &amp; Rapid Deployment</option>
+                  <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
+                  <option value="U.S. Federal & Multi-State Umbrella">U.S. Federal &amp; Multi-State Umbrella</option>
                 </select>
               </div>
 

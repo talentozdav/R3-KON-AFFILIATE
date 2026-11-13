@@ -124,7 +124,7 @@ export async function sendClientAccountInvitation(params: {
         </p>
 
         <div style="border-top: 1px solid #E2DDD3; margin-top: 36px; padding-top: 20px; font-size: 11px; color: #A0AEC0; line-height: 1.4;">
-          <p style="margin: 0;">Discreet Fiduciary Architecture · International Contingency Coordination</p>
+          <p style="margin: 0;">Discreet U.S. Fiduciary Architecture · U.S. Federal &amp; Delaware Compliance</p>
           <p style="margin: 4px 0 0 0;">Confidential Inquiries: services@r3-konaffiliate.online | +1(931)366-0615</p>
         </div>
       </div>

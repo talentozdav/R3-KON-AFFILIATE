@@ -67,11 +67,11 @@ applicationsRouter.post('/', async (req: Request, res: Response) => {
   }
 
   if (!phone || typeof phone !== 'string' || phone.trim().length < 6) {
-    errors.phone = 'Valid international direct phone number is required.';
+    errors.phone = 'Valid U.S. direct phone number is required.';
   }
 
   if (!country || typeof country !== 'string' || country.trim().length < 2) {
-    errors.country = 'Country of primary registration or residence is required.';
+    errors.country = 'U.S. state or jurisdiction of entity registration is required.';
   }
 
   if (!partnershipCategory || typeof partnershipCategory !== 'string') {

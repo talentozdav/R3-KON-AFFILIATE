@@ -27,7 +27,7 @@ export const Faq: React.FC = () => {
     },
     {
       q: 'When and how are commissions paid?',
-      a: 'Commission settlements are batched by the Finance department following banking clearance of client retainers. Payouts are disbursed via international wire transfer (SWIFT, Fedwire, CHAPS, or SEPA) according to scheduled settlement cycles.'
+      a: 'Commission settlements are batched by the Finance department following banking clearance of client retainers and IRS Form W-9 verification. Payouts are disbursed in USD via domestic U.S. banking rails (Fedwire, ACH Direct Deposit, or domestic wire transfer) according to scheduled settlement cycles.'
     },
     {
       q: 'How can an affiliate access their dashboard?',

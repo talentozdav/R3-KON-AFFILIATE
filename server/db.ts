@@ -83,12 +83,12 @@ class DatabaseStore {
       },
       {
         id: 'rule_sovereign_support',
-        name: 'Private Sovereign Support (Proposed)',
+        name: 'Private U.S. Principal Support (Proposed)',
         serviceCategory: 'Private Sovereign Support',
         ratePercent: 8.0,
         status: 'inactive', // Unapproved rules remain strictly inactive
         effectiveDate: new Date().toISOString().split('T')[0],
-        description: '8% referral fee for cross-border sovereign risk coordination. Awaiting formal R3 leadership authorization.'
+        description: '8% referral fee for multi-state U.S. principal and corporate risk coordination. Awaiting formal R3 leadership authorization.'
       }
     ];
 

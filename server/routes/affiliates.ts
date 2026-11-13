@@ -75,7 +75,7 @@ affiliatesRouter.post('/submit-lead', requireAuth, async (req: AuthenticatedRequ
       referralCode: affiliate.referralCode,
       clientIdentifier: clientIdentifier.trim(),
       clientType: clientType || 'Corporate',
-      region: region || 'International',
+      region: region || 'United States',
       serviceCategory,
       estimatedValue: estimatedValue ? Number(estimatedValue) : undefined,
       notes: notes?.trim()

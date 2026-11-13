@@ -24,10 +24,10 @@ export const Footer: React.FC<FooterProps> = ({
               <BrandLogo variant="dark" size="md" />
             </div>
             <p className="text-xs text-stone-400 font-light leading-relaxed max-w-sm mb-6">
-              International contingency coordination, crisis resolution, and executive advisory frameworks. The R3 Global Affiliate Network is restricted to verified professional partners.
+              United States contingency coordination, corporate registration alignment, and executive advisory frameworks. The R3 Affiliate Network is restricted to verified U.S. and compliant professional partners.
             </p>
             <div className="text-[11px] font-mono text-stone-500 tracking-wider">
-              REGISTRATION: 2026-R3-NETWORK · SWISS & UK COMPLIANT
+              REGISTRATION: 2026-R3-US · US FEDERAL &amp; DELAWARE COMPLIANT
             </div>
           </div>
 

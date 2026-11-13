@@ -81,7 +81,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
       const res = await api.submitAffiliateLead({
         clientIdentifier: leadClient.trim(),
         clientType: leadType,
-        region: leadRegion.trim() || 'International',
+        region: leadRegion.trim() || 'United States',
         serviceCategory: leadCategory,
         notes: leadNotes.trim() || undefined
       });
@@ -752,7 +752,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                           type="text"
                           value={leadClient}
                           onChange={(e) => setLeadClient(e.target.value)}
-                          placeholder="e.g. Single Family Office (Zurich) or Principal S.V."
+                          placeholder="e.g. Single Family Office (New York) or Principal M.V."
                           required
                           className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                         />
@@ -782,7 +782,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                             type="text"
                             value={leadRegion}
                             onChange={(e) => setLeadRegion(e.target.value)}
-                            placeholder="e.g. Western Europe / DIFC"
+                            placeholder="e.g. New York / Delaware / California"
                             className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                           />
                         </div>
@@ -799,7 +799,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                         >
                           <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
                           <option value="Institutional Crisis Advisory">Institutional Crisis Advisory & Rapid Deployment</option>
-                          <option value="Private Sovereign Support">Private Sovereign & Maritime Support</option>
+                          <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
                         </select>
                       </div>
 

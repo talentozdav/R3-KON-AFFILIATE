@@ -16,15 +16,15 @@ export const Hero: React.FC<HeroProps> = ({ onApplyClick, onLoginClick }) => {
             {/* Quiet kicker */}
             <div className="text-xs uppercase tracking-[0.25em] text-[#D4AF37] font-semibold mb-6 flex items-center gap-2">
               <span className="w-6 h-px bg-[#D4AF37]" />
-              <span>International Referral Partnership</span>
+              <span>United States Referral &amp; Compliance Network</span>
             </div>
 
             <h1 className="font-serif text-4xl sm:text-5xl lg:text-6xl text-[#0A192F] font-normal tracking-tight leading-[1.12] mb-6 text-balance">
-              Build Trusted Partnerships. Access a Global Referral Network.
+              Build Trusted Partnerships. Access a U.S. Referral Network.
             </h1>
 
             <p className="text-stone-600 text-base sm:text-lg leading-relaxed max-w-2xl mb-10 font-light">
-              Join the R3 Global Affiliate Network and introduce qualified clients to R3 Contingencies' international contingency coordination and executive support services.
+              Join the R3 Affiliate Network and introduce qualified U.S. and corporate clients to R3 Contingencies' domestic contingency coordination, compliance registration, and executive support services.
             </p>
 
             {/* CTAs */}
@@ -49,15 +49,15 @@ export const Hero: React.FC<HeroProps> = ({ onApplyClick, onLoginClick }) => {
             <div className="pt-8 border-t border-[#E2DDD3] w-full grid grid-cols-1 sm:grid-cols-3 gap-6 text-xs text-stone-600">
               <div>
                 <span className="block font-medium text-[#0A192F] mb-1">Selective Admission</span>
-                <span className="text-stone-500 leading-normal">Applications undergo rigorous KYC and professional compliance review.</span>
+                <span className="text-stone-500 leading-normal">Applications undergo rigorous U.S. KYC, OFAC sanctions, and entity registration review.</span>
               </div>
               <div>
                 <span className="block font-medium text-[#0A192F] mb-1">Discreet Coordination</span>
-                <span className="text-stone-500 leading-normal">Confidential handling of sensitive executive and high-net-worth referrals.</span>
+                <span className="text-stone-500 leading-normal">Confidential handling of sensitive U.S. executive and high-net-worth referrals.</span>
               </div>
               <div>
                 <span className="block font-medium text-[#0A192F] mb-1">Verified Conversions</span>
-                <span className="text-stone-500 leading-normal">Commissions calculated solely against executed, banked service agreements.</span>
+                <span className="text-stone-500 leading-normal">Commissions calculated solely against executed, banked U.S. service agreements.</span>
               </div>
             </div>
           </div>
@@ -79,7 +79,7 @@ export const Hero: React.FC<HeroProps> = ({ onApplyClick, onLoginClick }) => {
 
                 {/* Subtle caption */}
                 <div className="absolute bottom-4 left-4 right-4 text-white text-[11px] flex items-center justify-between pointer-events-none font-sans tracking-wide">
-                  <span className="opacity-90">R3 Contingency Coordination Headquarters</span>
+                  <span className="opacity-90">R3 U.S. Contingency Coordination Center</span>
                   <span className="font-mono opacity-70">EST. 2026</span>
                 </div>
               </div>
@@ -88,7 +88,7 @@ export const Hero: React.FC<HeroProps> = ({ onApplyClick, onLoginClick }) => {
             {/* Subdued architectural statement card below */}
             <div className="mt-4 p-5 bg-[#FAF9F6] border border-[#E2DDD3] text-xs text-stone-600 leading-relaxed">
               <span className="text-[#D4AF37] font-serif text-lg leading-none mr-1.5">“</span>
-              R3 Contingencies provides international contingency coordination, executive crisis resolution, and advisory frameworks for accredited private and corporate partners.
+              R3 Contingencies provides United States contingency coordination, corporate registration oversight, and federal compliance advisory frameworks for accredited private and corporate partners.
             </div>
           </div>
         </div>
