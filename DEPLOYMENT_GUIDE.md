@@ -133,17 +133,15 @@ VERCEL=1
 # Application URLs
 APP_URL=https://r3-kon-affiliate.vercel.app/
 
-# Session & Cryptographic Security
-SESSION_SECRET=e7b23194a8674d81f2c49e013a7b68d25439cb58e1d2c67b0981fae231bcde45
-
 # Official Support Contact Configuration
 SUPPORT_EMAIL=services@r3-konaffiliate.online
 SUPPORT_PHONE=+1(931)366-0615
 
-# Supabase Production Database (Optional / Extensible)
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
+# Supabase Production Database (Project: mxzjanjdwnhonqensnsw)
+VITE_SUPABASE_URL=https://mxzjanjdwnhonqensnsw.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+SUPABASE_URL=https://mxzjanjdwnhonqensnsw.supabase.co
+SUPABASE_SECRET_KEY=your-supabase-secret-key
 ```
 
 ---

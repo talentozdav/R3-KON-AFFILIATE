@@ -1,6 +1,6 @@
 -- ==============================================================================
 -- R3 CONTINGENCIES — COMPLETE IDEMPOTENT PRODUCTION DATABASE SCHEMA
--- Target Supabase Project: btyrmnklklxgqoxdhetd (https://btyrmnklklxgqoxdhetd.supabase.co)
+-- Target Supabase Project: mxzjanjdwnhonqensnsw (https://mxzjanjdwnhonqensnsw.supabase.co)
 -- Execution: Run this entire script in Supabase Dashboard -> SQL Editor -> New Query -> Run
 -- ==============================================================================
 

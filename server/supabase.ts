@@ -1,47 +1,162 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import crypto from 'crypto';
 import { db as memoryDb } from './db.js';
 
-// Project reference: btyrmnklklxgqoxdhetd
-const SUPABASE_PROJECT_REF = 'btyrmnklklxgqoxdhetd';
-const DEFAULT_SUPABASE_URL = `https://${SUPABASE_PROJECT_REF}.supabase.co`;
-
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabaseAnonKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-
 export const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
-export const isSupabaseConfigured = Boolean(supabaseUrl && (supabaseServiceKey || supabaseAnonKey));
+
+export interface SupabaseConfigStatus {
+  supabaseUrl: string;
+  projectRef: string | null;
+  hasServiceKey: boolean;
+  hasAnonKey: boolean;
+  isProduction: boolean;
+  isConfigured: boolean;
+  configError: string | null;
+}
+
+export function extractProjectRef(url: string): string | null {
+  if (!url) return null;
+  try {
+    const hostname = new URL(url).hostname;
+    const firstPart = hostname.split('.')[0];
+    return firstPart || null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveSupabaseConfig(
+  env: Record<string, string | undefined> = process.env,
+  prodOverride?: boolean
+): {
+  supabaseUrl: string;
+  supabaseServiceKey?: string;
+  supabaseAnonKey?: string;
+  status: SupabaseConfigStatus;
+} {
+  const isProd = prodOverride ?? (env.NODE_ENV === 'production' || Boolean(env.VERCEL));
+  const configuredServerUrl = env.SUPABASE_URL?.trim() || '';
+  const fallbackDevUrl = !isProd ? (env.VITE_SUPABASE_URL?.trim() || '') : '';
+  const supabaseUrl = configuredServerUrl || fallbackDevUrl;
+  const supabaseServiceKey = env.SUPABASE_SECRET_KEY?.trim() || env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined;
+  const supabaseAnonKey = env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() || env.VITE_SUPABASE_ANON_KEY?.trim() || undefined;
+  const projectRef = extractProjectRef(supabaseUrl);
+
+  let configError: string | null = null;
+  if (!supabaseUrl) {
+    configError = 'Missing server environment variable SUPABASE_URL.';
+  } else if (!projectRef) {
+    configError = 'Configured SUPABASE_URL is not a valid URL.';
+  } else if (!supabaseServiceKey) {
+    configError =
+      'Missing server-side Supabase secret credential (SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY). Public/anon keys cannot be used for privileged server operations.';
+  }
+
+  return {
+    supabaseUrl,
+    supabaseServiceKey,
+    supabaseAnonKey,
+    status: {
+      supabaseUrl,
+      projectRef,
+      hasServiceKey: Boolean(supabaseServiceKey),
+      hasAnonKey: Boolean(supabaseAnonKey),
+      isProduction: isProd,
+      isConfigured: Boolean(supabaseUrl && projectRef && supabaseServiceKey),
+      configError
+    }
+  };
+}
+
+const resolvedConfig = resolveSupabaseConfig();
+export const isSupabaseConfigured = resolvedConfig.status.isConfigured;
 
 let supabaseAdmin: SupabaseClient | null = null;
 let supabasePublic: SupabaseClient | null = null;
 
-if (isSupabaseConfigured) {
-  const activeKey = supabaseServiceKey || supabaseAnonKey!;
+if (resolvedConfig.status.isConfigured && resolvedConfig.supabaseServiceKey) {
   try {
-    supabaseAdmin = createClient(supabaseUrl, activeKey, {
+    supabaseAdmin = createClient(resolvedConfig.supabaseUrl, resolvedConfig.supabaseServiceKey, {
       auth: {
         persistSession: false,
-        autoRefreshToken: false,
+        autoRefreshToken: false
       }
     });
 
-    if (supabaseAnonKey) {
-      supabasePublic = createClient(supabaseUrl, supabaseAnonKey);
-    } else {
-      supabasePublic = supabaseAdmin;
+    if (resolvedConfig.supabaseAnonKey) {
+      supabasePublic = createClient(resolvedConfig.supabaseUrl, resolvedConfig.supabaseAnonKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false
+        }
+      });
     }
 
-    console.log(`[R3 Supabase] Initialized client for project ${SUPABASE_PROJECT_REF}. Service role: ${Boolean(supabaseServiceKey)}`);
+    console.log(
+      `[R3 Supabase] Initialized server client for project ${resolvedConfig.status.projectRef}.`
+    );
   } catch (err: any) {
     console.error('[R3 Supabase] Initialization error:', err.message);
+    supabaseAdmin = null;
   }
 } else {
   if (isProduction) {
-    console.error('[R3 Supabase FATAL] Production runtime started without Supabase credentials.');
+    console.error(`[R3 Supabase FATAL] ${resolvedConfig.status.configError}`);
+  } else if (resolvedConfig.supabaseUrl && !resolvedConfig.supabaseServiceKey) {
+    console.warn(
+      `[R3 Supabase] ${resolvedConfig.status.configError} Running with local development fallback.`
+    );
   } else {
     console.warn('[R3 Supabase] Live credentials not provided in environment. Running with local development fallback.');
   }
+}
+
+export function getSupabaseConfigStatus(): SupabaseConfigStatus {
+  return {
+    ...resolvedConfig.status,
+    isConfigured: Boolean(supabaseAdmin)
+  };
+}
+
+export function assertSupabaseInProduction(): void {
+  if (isProduction && !supabaseAdmin) {
+    throw new Error(
+      resolvedConfig.status.configError ||
+        'Server-side Supabase client is not configured in production.'
+    );
+  }
+}
+
+/**
+ * Isolated password sign-in helper. Uses public/publishable client if configured,
+ * otherwise an isolated ephemeral client with server credentials so supabaseAdmin state is never mutated.
+ */
+export async function signInWithSupabasePassword(
+  email: string,
+  password: string
+): Promise<{ data: any; error: any } | null> {
+  if (supabasePublic) {
+    return supabasePublic.auth.signInWithPassword({ email, password });
+  }
+  if (resolvedConfig.supabaseUrl && resolvedConfig.supabaseServiceKey) {
+    const authClient = createClient(resolvedConfig.supabaseUrl, resolvedConfig.supabaseServiceKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      }
+    });
+    return authClient.auth.signInWithPassword({ email, password });
+  }
+  return null;
+}
+
+/**
+ * Test-only hook to simulate Supabase client behavior (e.g. DB insert failures) without live network calls.
+ */
+export function setSupabaseAdminForTesting(client: SupabaseClient | null): void {
+  if (isProduction || process.env.NODE_ENV !== 'test') {
+    throw new Error('setSupabaseAdminForTesting is restricted to automated test execution.');
+  }
+  supabaseAdmin = client;
 }
 
 export { supabaseAdmin, supabasePublic };
@@ -201,23 +316,48 @@ export async function verifySupabaseToken(token: string): Promise<AuthenticatedU
 // DATABASE HEALTH CHECK
 // ==============================================================================
 
-export async function checkDatabaseConnectivity(): Promise<{ connected: boolean; latencyMs?: number; error?: string }> {
+export async function checkDatabaseConnectivity(): Promise<{
+  connected: boolean;
+  projectRef?: string | null;
+  latencyMs?: number;
+  error?: string;
+}> {
   if (!supabaseAdmin) {
-    if (isProduction) {
-      return { connected: false, error: 'SUPABASE_SERVICE_ROLE_KEY is not configured in production.' };
+    if (isProduction || resolvedConfig.status.supabaseUrl) {
+      return {
+        connected: false,
+        projectRef: resolvedConfig.status.projectRef,
+        error:
+          resolvedConfig.status.configError ||
+          'Server-side Supabase secret key is not configured.'
+      };
     }
-    return { connected: true, latencyMs: 0 };
+    return { connected: true, projectRef: null, latencyMs: 0 };
   }
 
   const start = Date.now();
   try {
     const { error } = await supabaseAdmin.from('profiles').select('count', { count: 'exact', head: true });
     if (error && error.code !== 'PGRST116') {
-      return { connected: false, latencyMs: Date.now() - start, error: error.message };
+      return {
+        connected: false,
+        projectRef: resolvedConfig.status.projectRef,
+        latencyMs: Date.now() - start,
+        error: error.message
+      };
     }
-    return { connected: true, latencyMs: Date.now() - start };
+    return {
+      connected: true,
+      projectRef: resolvedConfig.status.projectRef,
+      latencyMs: Date.now() - start
+    };
   } catch (err: any) {
-    return { connected: false, latencyMs: Date.now() - start, error: err.message };
+    return {
+      connected: false,
+      projectRef: resolvedConfig.status.projectRef,
+      latencyMs: Date.now() - start,
+      error: err.message
+    };
   }
 }
 
@@ -277,19 +417,14 @@ export async function createAffiliateApplication(data: Omit<AffiliateApplication
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) {
-        throw new Error(`Production database failure saving application: ${error.message}`);
-      }
-      console.warn('[R3 Supabase] Application insert error, falling back to local memory store:', error.message);
-    } else if (inserted) {
-      return mapApplicationRow(inserted);
+    if (error || !inserted) {
+      throw new Error(`Database error saving affiliate application: ${error?.message || 'No record returned'}`);
     }
-  } else if (isProduction) {
-    throw new Error('Database service unavailable in production.');
+    return mapApplicationRow(inserted);
   }
+  assertSupabaseInProduction();
 
-  // Memory fallback for local development only
+  // Memory fallback for local development/tests without Supabase credentials
   const record: AffiliateApplicationRecord = {
     id: `app_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     referenceNumber: ref,
@@ -313,13 +448,12 @@ export async function getAffiliateApplicationByEmail(email: string): Promise<Aff
       .limit(1)
       .maybeSingle();
 
-    if (!error && data) {
-      return mapApplicationRow(data);
-    }
-    if (error && isProduction) {
+    if (error) {
       throw new Error(`Database error querying application: ${error.message}`);
     }
+    return data ? mapApplicationRow(data) : null;
   }
+  assertSupabaseInProduction();
 
   const mem = memoryDb.applications.find(a => a.email.toLowerCase() === normalized);
   return mem ? (mem as any) : null;
@@ -338,13 +472,15 @@ export async function getAffiliateApplicationByRef(ref: string, email?: string):
     }
 
     const { data, error } = await query.maybeSingle();
-    if (!error && data) {
-      return mapApplicationRow(data);
+    if (error) {
+      throw new Error(`Database error querying application reference: ${error.message}`);
     }
+    return data ? mapApplicationRow(data) : null;
   }
+  assertSupabaseInProduction();
 
-  const mem = memoryDb.applications.find(a => 
-    a.referenceNumber.toUpperCase() === cleanRef && 
+  const mem = memoryDb.applications.find(a =>
+    a.referenceNumber.toUpperCase() === cleanRef &&
     (!email || a.email.toLowerCase() === email.trim().toLowerCase())
   );
   return mem ? (mem as any) : null;
@@ -358,11 +494,11 @@ export async function getAffiliateApplications(): Promise<AffiliateApplicationRe
       .order('submitted_at', { ascending: false });
 
     if (error) {
-      if (isProduction) throw new Error(`Database error listing applications: ${error.message}`);
-      return memoryDb.applications as any;
+      throw new Error(`Database error listing applications: ${error.message}`);
     }
     return (data || []).map(mapApplicationRow);
   }
+  assertSupabaseInProduction();
   return memoryDb.applications as any;
 }
 
@@ -387,12 +523,12 @@ export async function reviewAffiliateApplication(
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) throw new Error(`Database error reviewing application: ${error.message}`);
-    } else if (data) {
-      return mapApplicationRow(data);
+    if (error || !data) {
+      throw new Error(`Database error reviewing application: ${error?.message || 'Application not found'}`);
     }
+    return mapApplicationRow(data);
   }
+  assertSupabaseInProduction();
 
   const mem = memoryDb.applications.find(a => a.id === id);
   if (!mem) throw new Error('Application not found');
@@ -481,12 +617,12 @@ export async function createAffiliate(data: {
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) throw new Error(`Database error creating affiliate: ${error.message}`);
-    } else if (inserted) {
-      return mapAffiliateRow(inserted);
+    if (error || !inserted) {
+      throw new Error(`Database error creating affiliate: ${error?.message || 'No record returned'}`);
     }
+    return mapAffiliateRow(inserted);
   }
+  assertSupabaseInProduction();
 
   const mem: AffiliateRecord = {
     id: `aff_${Date.now()}`,
@@ -515,8 +651,10 @@ export async function getAffiliateById(id: string): Promise<AffiliateRecord | nu
       .eq('id', id)
       .maybeSingle();
 
-    if (!error && data) return mapAffiliateRow(data);
+    if (error) throw new Error(`Database error querying affiliate: ${error.message}`);
+    return data ? mapAffiliateRow(data) : null;
   }
+  assertSupabaseInProduction();
   const mem = memoryDb.affiliates.find(a => a.id === id);
   return mem ? (mem as any) : null;
 }
@@ -529,8 +667,10 @@ export async function getAffiliateByUserId(userId: string): Promise<AffiliateRec
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (!error && data) return mapAffiliateRow(data);
+    if (error) throw new Error(`Database error querying affiliate by user: ${error.message}`);
+    return data ? mapAffiliateRow(data) : null;
   }
+  assertSupabaseInProduction();
   const mem = memoryDb.affiliates.find(a => a.userId === userId);
   return mem ? (mem as any) : null;
 }
@@ -544,8 +684,10 @@ export async function getAffiliateByEmail(email: string): Promise<AffiliateRecor
       .eq('email', normalized)
       .maybeSingle();
 
-    if (!error && data) return mapAffiliateRow(data);
+    if (error) throw new Error(`Database error querying affiliate by email: ${error.message}`);
+    return data ? mapAffiliateRow(data) : null;
   }
+  assertSupabaseInProduction();
   const mem = memoryDb.affiliates.find(a => a.email.toLowerCase() === normalized);
   return mem ? (mem as any) : null;
 }
@@ -559,8 +701,10 @@ export async function getAffiliateByCode(code: string): Promise<AffiliateRecord 
       .eq('referral_code', clean)
       .maybeSingle();
 
-    if (!error && data) return mapAffiliateRow(data);
+    if (error) throw new Error(`Database error querying referral code: ${error.message}`);
+    return data ? mapAffiliateRow(data) : null;
   }
+  assertSupabaseInProduction();
   const mem = memoryDb.affiliates.find(a => a.referralCode.toUpperCase() === clean);
   return mem ? (mem as any) : null;
 }
@@ -573,11 +717,11 @@ export async function getAffiliates(): Promise<AffiliateRecord[]> {
       .order('joined_at', { ascending: false });
 
     if (error) {
-      if (isProduction) throw new Error(`Database error querying affiliates: ${error.message}`);
-      return memoryDb.affiliates as any;
+      throw new Error(`Database error querying affiliates: ${error.message}`);
     }
     return (data || []).map(mapAffiliateRow);
   }
+  assertSupabaseInProduction();
   return memoryDb.affiliates as any;
 }
 
@@ -589,8 +733,10 @@ export async function updateAffiliateStatus(id: string, status: AffiliateRecord[
       .update({ status, updated_at: now })
       .eq('id', id);
 
-    if (error && isProduction) throw new Error(`Database error updating affiliate: ${error.message}`);
+    if (error) throw new Error(`Database error updating affiliate: ${error.message}`);
+    return;
   }
+  assertSupabaseInProduction();
   const mem = memoryDb.affiliates.find(a => a.id === id);
   if (mem) {
     mem.status = status as any;
@@ -637,12 +783,11 @@ export async function recordReferralClick(data: {
       .maybeSingle();
 
     if (affErr || !aff) {
-      if (isProduction) throw new Error('Affiliate not found for referral code.');
-      return { isUnique: false };
+      throw new Error(affErr ? `Database error checking referral code: ${affErr.message}` : 'Affiliate not found for referral code.');
     }
 
     // 2. Check if this visitorHash has been recorded for this referralCode
-    const { data: existing } = await supabaseAdmin
+    const { data: existing, error: existingErr } = await supabaseAdmin
       .from('referral_clicks')
       .select('id')
       .eq('referral_code', cleanCode)
@@ -650,10 +795,14 @@ export async function recordReferralClick(data: {
       .limit(1)
       .maybeSingle();
 
+    if (existingErr) {
+      throw new Error(`Database error checking visitor uniqueness: ${existingErr.message}`);
+    }
+
     const isUnique = !existing;
 
     // 3. Insert click
-    await supabaseAdmin.from('referral_clicks').insert({
+    const { error: insertErr } = await supabaseAdmin.from('referral_clicks').insert({
       referral_code: cleanCode,
       affiliate_id: aff.id,
       visitor_hash: data.visitorHash,
@@ -662,8 +811,12 @@ export async function recordReferralClick(data: {
       user_agent: data.userAgent || null
     });
 
+    if (insertErr) {
+      throw new Error(`Database error recording referral click: ${insertErr.message}`);
+    }
+
     // 4. Update counters
-    await supabaseAdmin
+    const { error: updateErr } = await supabaseAdmin
       .from('affiliates')
       .update({
         total_clicks: (aff.total_clicks || 0) + 1,
@@ -672,8 +825,13 @@ export async function recordReferralClick(data: {
       })
       .eq('id', aff.id);
 
+    if (updateErr) {
+      throw new Error(`Database error updating affiliate counters: ${updateErr.message}`);
+    }
+
     return { isUnique };
   }
+  assertSupabaseInProduction();
 
   // Memory fallback
   const memRes = memoryDb.trackReferralClick(cleanCode, data.visitorHash, data.referer, data.userAgent);
@@ -686,11 +844,11 @@ export async function getReferralClicks(affiliateId?: string): Promise<any[]> {
     if (affiliateId) query = query.eq('affiliate_id', affiliateId);
     const { data, error } = await query;
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching referral clicks: ${error.message}`);
-      return memoryDb.clicks;
+      throw new Error(`Database error fetching referral clicks: ${error.message}`);
     }
     return data || [];
   }
+  assertSupabaseInProduction();
   return memoryDb.clicks;
 }
 
@@ -722,12 +880,12 @@ export async function createReferralLead(data: {
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) throw new Error(`Database error saving lead: ${error.message}`);
-    } else if (inserted) {
-      return inserted;
+    if (error || !inserted) {
+      throw new Error(`Database error saving lead: ${error?.message || 'No record returned'}`);
     }
+    return inserted;
   }
+  assertSupabaseInProduction();
 
   const mem = {
     id: `lead_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -747,11 +905,11 @@ export async function getReferralLeads(affiliateId?: string): Promise<any[]> {
 
     const { data, error } = await query;
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching leads: ${error.message}`);
-      return memoryDb.leads;
+      throw new Error(`Database error fetching leads: ${error.message}`);
     }
     return data || [];
   }
+  assertSupabaseInProduction();
   if (affiliateId) return memoryDb.leads.filter(l => l.affiliateId === affiliateId);
   return memoryDb.leads;
 }
@@ -790,19 +948,23 @@ export async function createConversion(data: {
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) throw new Error(`Database error creating conversion: ${error.message}`);
-    } else if (inserted) {
-      // If leadId provided, update lead status to converted
-      if (data.leadId) {
-        await supabaseAdmin
-          .from('referral_leads')
-          .update({ status: 'converted', updated_at: now })
-          .eq('id', data.leadId);
-      }
-      return inserted;
+    if (error || !inserted) {
+      throw new Error(`Database error creating conversion: ${error?.message || 'Insert returned no data'}`);
     }
+
+    if (data.leadId) {
+      const { error: leadErr } = await supabaseAdmin
+        .from('referral_leads')
+        .update({ status: 'converted', updated_at: now })
+        .eq('id', data.leadId);
+      if (leadErr) {
+        console.warn('[R3 Supabase] Lead status conversion link warning:', leadErr.message);
+      }
+    }
+    return inserted;
   }
+
+  assertSupabaseInProduction();
 
   const mem = {
     id: `cnv_${Date.now()}`,
@@ -828,11 +990,11 @@ export async function getConversions(affiliateId?: string): Promise<any[]> {
 
     const { data, error } = await query;
     if (error) {
-      if (isProduction) throw new Error(`Database error querying conversions: ${error.message}`);
-      return memoryDb.conversions;
+      throw new Error(`Database error querying conversions: ${error.message}`);
     }
     return data || [];
   }
+  assertSupabaseInProduction();
   if (affiliateId) return memoryDb.conversions.filter(c => c.affiliateId === affiliateId);
   return memoryDb.conversions;
 }
@@ -852,9 +1014,16 @@ export async function verifyConversion(id: string, verificationStatus: string, v
       .select()
       .single();
 
-    if (error && isProduction) throw new Error(`Database error verifying conversion: ${error.message}`);
-    if (data) return data;
+    if (error) {
+      throw new Error(`Database error verifying conversion: ${error.message}`);
+    }
+    if (!data) {
+      throw new Error('Conversion record not found.');
+    }
+    return data;
   }
+
+  assertSupabaseInProduction();
   const mem = memoryDb.conversions.find(c => c.id === id);
   if (mem) {
     mem.verificationStatus = verificationStatus as any;
@@ -868,9 +1037,12 @@ export async function verifyConversion(id: string, verificationStatus: string, v
 export async function getCommissionRules(): Promise<any[]> {
   if (supabaseAdmin) {
     const { data, error } = await supabaseAdmin.from('commission_rules').select('*').order('created_at', { ascending: false });
-    if (!error && data) return data;
-    if (error && isProduction) throw new Error(`Database error fetching rules: ${error.message}`);
+    if (error) {
+      throw new Error(`Database error fetching rules: ${error.message}`);
+    }
+    return data || [];
   }
+  assertSupabaseInProduction();
   return memoryDb.commissionRules;
 }
 
@@ -899,9 +1071,12 @@ export async function createCommissionRule(data: {
       .select()
       .single();
 
-    if (error && isProduction) throw new Error(`Database error creating rule: ${error.message}`);
-    if (inserted) return inserted;
+    if (error || !inserted) {
+      throw new Error(`Database error creating rule: ${error?.message || 'Insert returned no data'}`);
+    }
+    return inserted;
   }
+  assertSupabaseInProduction();
   const mem = {
     id: `rule_${Date.now()}`,
     ...data,
@@ -921,9 +1096,15 @@ export async function toggleCommissionRuleStatus(id: string, status: 'active' | 
       .select()
       .single();
 
-    if (error && isProduction) throw new Error(`Database error updating rule: ${error.message}`);
-    if (data) return data;
+    if (error) {
+      throw new Error(`Database error updating rule: ${error.message}`);
+    }
+    if (!data) {
+      throw new Error('Commission rule not found.');
+    }
+    return data;
   }
+  assertSupabaseInProduction();
   const mem = memoryDb.commissionRules.find(r => r.id === id);
   if (mem) mem.status = status;
   return mem;
@@ -942,13 +1123,20 @@ export async function generateCommission(data: {
   let affiliate: any = null;
 
   if (supabaseAdmin) {
-    const { data: conv } = await supabaseAdmin.from('conversions').select('*').eq('id', data.conversionId).single();
+    const { data: conv, error: convErr } = await supabaseAdmin.from('conversions').select('*').eq('id', data.conversionId).single();
+    if (convErr) {
+      throw new Error(`Database error loading conversion: ${convErr.message}`);
+    }
     conversion = conv;
     if (conversion) {
-      const { data: aff } = await supabaseAdmin.from('affiliates').select('*').eq('id', conversion.affiliate_id).single();
+      const { data: aff, error: affErr } = await supabaseAdmin.from('affiliates').select('*').eq('id', conversion.affiliate_id).single();
+      if (affErr) {
+        throw new Error(`Database error loading affiliate: ${affErr.message}`);
+      }
       affiliate = aff;
     }
   } else {
+    assertSupabaseInProduction();
     conversion = memoryDb.conversions.find(c => c.id === data.conversionId);
     if (conversion) affiliate = memoryDb.affiliates.find(a => a.id === conversion.affiliateId);
   }
@@ -990,13 +1178,13 @@ export async function generateCommission(data: {
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) throw new Error(`Database error generating commission: ${error.message}`);
-    } else if (inserted) {
-      return inserted;
+    if (error || !inserted) {
+      throw new Error(`Database error generating commission: ${error?.message || 'Insert returned no data'}`);
     }
+    return inserted;
   }
 
+  assertSupabaseInProduction();
   const mem = {
     id: `com_${Date.now()}`,
     commissionReference: commRef,
@@ -1021,11 +1209,11 @@ export async function getCommissions(affiliateId?: string): Promise<any[]> {
 
     const { data, error } = await query;
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching commissions: ${error.message}`);
-      return memoryDb.commissions;
+      throw new Error(`Database error fetching commissions: ${error.message}`);
     }
     return data || [];
   }
+  assertSupabaseInProduction();
   if (affiliateId) return memoryDb.commissions.filter(c => c.affiliateId === affiliateId);
   return memoryDb.commissions;
 }
@@ -1047,10 +1235,16 @@ export async function actionCommission(id: string, action: 'approve' | 'reverse'
       .select()
       .single();
 
-    if (error && isProduction) throw new Error(`Database error updating commission: ${error.message}`);
-    if (data) return data;
+    if (error) {
+      throw new Error(`Database error updating commission: ${error.message}`);
+    }
+    if (!data) {
+      throw new Error('Commission record not found.');
+    }
+    return data;
   }
 
+  assertSupabaseInProduction();
   const mem = memoryDb.commissions.find(c => c.id === id);
   if (mem) {
     mem.status = nextStatus as any;
@@ -1098,20 +1292,24 @@ export async function preparePayoutBatch(data: {
       .select()
       .single();
 
-    if (payErr) {
-      if (isProduction) throw new Error(`Database error creating payout: ${payErr.message}`);
-    } else if (payout) {
-      // Link commissions to payout
-      const commissionIds = eligible.map((c: any) => c.id);
-      await supabaseAdmin
-        .from('commissions')
-        .update({ payout_id: payout.id })
-        .in('id', commissionIds);
-
-      return payout;
+    if (payErr || !payout) {
+      throw new Error(`Database error creating payout: ${payErr?.message || 'Insert returned no data'}`);
     }
+
+    const commissionIds = eligible.map((c: any) => c.id);
+    const { error: linkErr } = await supabaseAdmin
+      .from('commissions')
+      .update({ payout_id: payout.id })
+      .in('id', commissionIds);
+
+    if (linkErr) {
+      throw new Error(`Database error linking commissions to payout batch: ${linkErr.message}`);
+    }
+
+    return payout;
   }
 
+  assertSupabaseInProduction();
   const memPayout = {
     id: `pay_${Date.now()}`,
     payoutReference: payRef,
@@ -1137,11 +1335,11 @@ export async function getPayouts(affiliateId?: string): Promise<any[]> {
 
     const { data, error } = await query;
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching payouts: ${error.message}`);
-      return memoryDb.payouts;
+      throw new Error(`Database error fetching payouts: ${error.message}`);
     }
     return data || [];
   }
+  assertSupabaseInProduction();
   if (affiliateId) return memoryDb.payouts.filter(p => p.affiliateId === affiliateId);
   return memoryDb.payouts;
 }
@@ -1162,14 +1360,21 @@ export async function recordPayoutPayment(id: string, paymentReference: string, 
       .select()
       .single();
 
-    if (error && isProduction) throw new Error(`Database error settling payout: ${error.message}`);
-    if (data) {
-      // Update linked commissions to paid
-      await supabaseAdmin.from('commissions').update({ status: 'paid' }).eq('payout_id', id);
-      return data;
+    if (error) {
+      throw new Error(`Database error settling payout: ${error.message}`);
     }
+    if (!data) {
+      throw new Error('Payout batch not found.');
+    }
+
+    const { error: commErr } = await supabaseAdmin.from('commissions').update({ status: 'paid' }).eq('payout_id', id);
+    if (commErr) {
+      throw new Error(`Database error updating commissions for settled payout: ${commErr.message}`);
+    }
+    return data;
   }
 
+  assertSupabaseInProduction();
   const mem = memoryDb.payouts.find(p => p.id === id);
   if (mem) {
     mem.status = 'paid';
@@ -1197,7 +1402,7 @@ export async function recordAuditLog(
 ): Promise<void> {
   const now = new Date().toISOString();
   if (supabaseAdmin) {
-    await supabaseAdmin.from('audit_logs').insert({
+    const { error } = await supabaseAdmin.from('audit_logs').insert({
       action,
       actor_email: actorEmail,
       actor_role: actorRole,
@@ -1207,9 +1412,13 @@ export async function recordAuditLog(
       ip_address: ipAddress || null,
       timestamp: now
     });
+    if (error) {
+      throw new Error(`Database error recording audit log: ${error.message}`);
+    }
     return;
   }
 
+  assertSupabaseInProduction();
   memoryDb.recordAuditLog(actorEmail, actorRole as any, action, targetType, targetId, details, ipAddress);
 }
 
@@ -1221,9 +1430,12 @@ export async function getAuditLogs(): Promise<any[]> {
       .order('timestamp', { ascending: false })
       .limit(200);
 
-    if (!error && data) return data;
-    if (error && isProduction) throw new Error(`Database error fetching audit logs: ${error.message}`);
+    if (error) {
+      throw new Error(`Database error fetching audit logs: ${error.message}`);
+    }
+    return data || [];
   }
+  assertSupabaseInProduction();
   return memoryDb.auditLogs;
 }
 
@@ -1282,51 +1494,63 @@ export async function getAffiliateDashboardData(affiliateId: string): Promise<an
 
 export async function getAdminOverviewMetrics(): Promise<any> {
   if (supabaseAdmin) {
-    try {
-      const [
-        { data: apps },
-        { data: affs },
-        { data: leads },
-        { data: convs },
-        { data: comms },
-        { data: pays },
-        { data: rules }
-      ] = await Promise.all([
-        supabaseAdmin.from('affiliate_applications').select('id, status'),
-        supabaseAdmin.from('affiliates').select('id, status'),
-        supabaseAdmin.from('referral_leads').select('id'),
-        supabaseAdmin.from('conversions').select('id, verification_status'),
-        supabaseAdmin.from('commissions').select('id, status, commission_amount'),
-        supabaseAdmin.from('payouts').select('id, status, amount'),
-        supabaseAdmin.from('commission_rules').select('id, status')
-      ]);
+    const [
+      appsRes,
+      affsRes,
+      leadsRes,
+      convsRes,
+      commsRes,
+      paysRes,
+      rulesRes
+    ] = await Promise.all([
+      supabaseAdmin.from('affiliate_applications').select('id, status'),
+      supabaseAdmin.from('affiliates').select('id, status'),
+      supabaseAdmin.from('referral_leads').select('id'),
+      supabaseAdmin.from('conversions').select('id, verification_status'),
+      supabaseAdmin.from('commissions').select('id, status, commission_amount'),
+      supabaseAdmin.from('payouts').select('id, status, amount'),
+      supabaseAdmin.from('commission_rules').select('id, status')
+    ]);
 
-      const allApps = apps || [];
-      const allAffs = affs || [];
-      const allConvs = convs || [];
-      const allComms = comms || [];
-      const allPays = pays || [];
-      const allRules = rules || [];
+    const firstError =
+      appsRes.error ||
+      affsRes.error ||
+      leadsRes.error ||
+      convsRes.error ||
+      commsRes.error ||
+      paysRes.error ||
+      rulesRes.error;
 
-      return {
-        pendingApplications: allApps.filter((a: any) => a.status === 'SUBMITTED' || a.status === 'UNDER_REVIEW').length,
-        totalApplications: allApps.length,
-        activeAffiliates: allAffs.filter((a: any) => a.status === 'active').length,
-        totalAffiliates: allAffs.length,
-        totalLeads: (leads || []).length,
-        verifiedConversions: allConvs.filter((c: any) => c.verification_status === 'verified').length,
-        pendingConversions: allConvs.filter((c: any) => c.verification_status === 'pending_verification').length,
-        pendingCommissionApproval: allComms.filter((c: any) => c.status === 'pending').reduce((s: number, c: any) => s + Number(c.commission_amount), 0),
-        approvedUnpaidCommissions: allComms.filter((c: any) => c.status === 'approved').reduce((s: number, c: any) => s + Number(c.commission_amount), 0),
-        totalPaidOutCommissions: allPays.filter((p: any) => p.status === 'paid').reduce((s: number, p: any) => s + Number(p.amount), 0),
-        activeCommissionRulesCount: allRules.filter((r: any) => r.status === 'active').length
-      };
-    } catch (err: any) {
-      if (isProduction) throw new Error(`Database error calculating metrics: ${err.message}`);
+    if (firstError) {
+      throw new Error(`Database error calculating overview metrics: ${firstError.message}`);
     }
+
+    const allApps = appsRes.data || [];
+    const allAffs = affsRes.data || [];
+    const allLeads = leadsRes.data || [];
+    const allConvs = convsRes.data || [];
+    const allComms = commsRes.data || [];
+    const allPays = paysRes.data || [];
+    const allRules = rulesRes.data || [];
+
+    return {
+      pendingApplications: allApps.filter((a: any) => a.status === 'SUBMITTED' || a.status === 'UNDER_REVIEW').length,
+      totalApplications: allApps.length,
+      activeAffiliates: allAffs.filter((a: any) => a.status === 'active').length,
+      totalAffiliates: allAffs.length,
+      totalLeads: allLeads.length,
+      verifiedConversions: allConvs.filter((c: any) => c.verification_status === 'verified').length,
+      pendingConversions: allConvs.filter((c: any) => c.verification_status === 'pending_verification').length,
+      pendingCommissionApproval: allComms.filter((c: any) => c.status === 'pending').reduce((s: number, c: any) => s + Number(c.commission_amount), 0),
+      approvedUnpaidCommissions: allComms.filter((c: any) => c.status === 'approved').reduce((s: number, c: any) => s + Number(c.commission_amount), 0),
+      totalPaidOutCommissions: allPays.filter((p: any) => p.status === 'paid').reduce((s: number, p: any) => s + Number(p.amount), 0),
+      activeCommissionRulesCount: allRules.filter((r: any) => r.status === 'active').length
+    };
   }
 
-  // Memory fallback for local development
+  assertSupabaseInProduction();
+
+  // Memory fallback for local development without Supabase credentials
   return {
     pendingApplications: memoryDb.applications.filter(a => a.status === 'SUBMITTED' || a.status === 'UNDER_REVIEW').length,
     totalApplications: memoryDb.applications.length,
@@ -1372,6 +1596,29 @@ const memoryClientInquiries: any[] = [];
 const memoryClientNotes: any[] = [];
 const memoryClientFollowups: any[] = [];
 
+function mapClientRegistrationRow(r: any): ClientRegistrationRecord {
+  return {
+    id: r.id,
+    referenceNumber: r.reference_number,
+    fullName: r.full_name,
+    email: r.email,
+    phone: r.phone,
+    company: r.company,
+    country: r.country,
+    serviceCategory: r.service_category,
+    requirementsBrief: r.requirements_brief,
+    referralCode: r.referral_code,
+    status: r.status,
+    invitationStatus: r.invitation_status,
+    invitationSentAt: r.invitation_sent_at,
+    invitationError: r.invitation_error,
+    accountActivatedAt: r.account_activated_at,
+    userId: r.user_id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  };
+}
+
 export async function insertClientRegistration(data: {
   fullName: string;
   email: string;
@@ -1404,32 +1651,14 @@ export async function insertClientRegistration(data: {
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) {
-        throw new Error(`Production database error saving client registration: ${error.message}`);
-      }
-      console.warn('[R3 Supabase] Client registration insert error, using local fallback:', error.message);
-    } else if (inserted) {
-      return {
-        id: inserted.id,
-        referenceNumber: inserted.reference_number,
-        fullName: inserted.full_name,
-        email: inserted.email,
-        phone: inserted.phone,
-        company: inserted.company,
-        country: inserted.country,
-        serviceCategory: inserted.service_category,
-        requirementsBrief: inserted.requirements_brief,
-        referralCode: inserted.referral_code,
-        status: inserted.status,
-        invitationStatus: inserted.invitation_status,
-        createdAt: inserted.created_at,
-        updatedAt: inserted.updated_at
-      };
+    if (error || !inserted) {
+      throw new Error(`Database error saving client registration: ${error?.message || 'Insert returned no data'}`);
     }
-  } else if (isProduction) {
-    throw new Error('Database service unavailable in production.');
+
+    return mapClientRegistrationRow(inserted);
   }
+
+  assertSupabaseInProduction();
 
   const record: ClientRegistrationRecord = {
     id: `clt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -1459,32 +1688,39 @@ export async function getClientRegistrations(): Promise<ClientRegistrationRecord
       .order('created_at', { ascending: false });
 
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching client registrations: ${error.message}`);
-      return memoryClientRegistrations;
+      throw new Error(`Database error fetching client registrations: ${error.message}`);
     }
 
-    return (data || []).map((r: any) => ({
-      id: r.id,
-      referenceNumber: r.reference_number,
-      fullName: r.full_name,
-      email: r.email,
-      phone: r.phone,
-      company: r.company,
-      country: r.country,
-      serviceCategory: r.service_category,
-      requirementsBrief: r.requirements_brief,
-      referralCode: r.referral_code,
-      status: r.status,
-      invitationStatus: r.invitation_status,
-      invitationSentAt: r.invitation_sent_at,
-      invitationError: r.invitation_error,
-      accountActivatedAt: r.account_activated_at,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
-    }));
+    return (data || []).map(mapClientRegistrationRow);
   }
 
+  assertSupabaseInProduction();
   return memoryClientRegistrations;
+}
+
+export async function getClientRegistrationByEmail(email: string): Promise<ClientRegistrationRecord | null> {
+  const normalized = email.trim().toLowerCase();
+  if (supabaseAdmin) {
+    const { data, error } = await supabaseAdmin
+      .from('client_registrations')
+      .select('*')
+      .ilike('email', normalized)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new Error(`Database error looking up client registration: ${error.message}`);
+    }
+
+    const active = (data || []).find((r: any) => r.status !== 'DECLINED' && r.status !== 'ARCHIVED');
+    return active ? mapClientRegistrationRow(active) : null;
+  }
+
+  assertSupabaseInProduction();
+  return (
+    memoryClientRegistrations.find(
+      r => r.email.toLowerCase() === normalized && r.status !== 'DECLINED' && r.status !== 'ARCHIVED'
+    ) || null
+  );
 }
 
 export async function updateClientRegistrationInvitation(
@@ -1494,7 +1730,7 @@ export async function updateClientRegistrationInvitation(
 ): Promise<void> {
   const now = new Date().toISOString();
   if (supabaseAdmin) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('client_registrations')
       .update({
         invitation_status: invitationStatus,
@@ -1503,9 +1739,14 @@ export async function updateClientRegistrationInvitation(
         updated_at: now
       })
       .eq('id', id);
+
+    if (error) {
+      throw new Error(`Database error updating invitation status: ${error.message}`);
+    }
     return;
   }
 
+  assertSupabaseInProduction();
   const rec = memoryClientRegistrations.find(r => r.id === id);
   if (rec) {
     rec.invitationStatus = invitationStatus;
@@ -1521,13 +1762,18 @@ export async function updateClientRegistrationStatus(
 ): Promise<void> {
   const now = new Date().toISOString();
   if (supabaseAdmin) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('client_registrations')
       .update({ status, updated_at: now })
       .eq('id', id);
+
+    if (error) {
+      throw new Error(`Database error updating client registration status: ${error.message}`);
+    }
     return;
   }
 
+  assertSupabaseInProduction();
   const rec = memoryClientRegistrations.find(r => r.id === id);
   if (rec) {
     rec.status = status;
@@ -1569,13 +1815,13 @@ export async function insertClientInquiry(data: {
       .select()
       .single();
 
-    if (error) {
-      if (isProduction) throw new Error(`Database error saving inquiry: ${error.message}`);
-    } else if (inserted) {
-      return { id: inserted.id, referenceNumber: inserted.reference_number };
+    if (error || !inserted) {
+      throw new Error(`Database error saving inquiry: ${error?.message || 'Insert returned no data'}`);
     }
+    return { id: inserted.id, referenceNumber: inserted.reference_number };
   }
 
+  assertSupabaseInProduction();
   const record = {
     id: `inq_${Date.now()}`,
     referenceNumber: ref,
@@ -1595,12 +1841,12 @@ export async function getClientInquiries(clientId?: string): Promise<any[]> {
     }
     const { data, error } = await query;
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching inquiries: ${error.message}`);
-      return memoryClientInquiries;
+      throw new Error(`Database error fetching inquiries: ${error.message}`);
     }
     return data || [];
   }
 
+  assertSupabaseInProduction();
   if (clientId) {
     return memoryClientInquiries.filter(i => i.clientId === clientId);
   }
@@ -1630,10 +1876,13 @@ export async function insertClientNote(data: {
       .select()
       .single();
 
-    if (error && isProduction) throw new Error(`Database error inserting note: ${error.message}`);
-    if (inserted) return inserted;
+    if (error || !inserted) {
+      throw new Error(`Database error inserting note: ${error?.message || 'Insert returned no data'}`);
+    }
+    return inserted;
   }
 
+  assertSupabaseInProduction();
   const note = { id: `note_${Date.now()}`, ...data, createdAt: new Date().toISOString() };
   memoryClientNotes.push(note);
   return note;
@@ -1648,12 +1897,12 @@ export async function getClientNotes(registrationId: string): Promise<any[]> {
       .order('created_at', { ascending: true });
 
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching notes: ${error.message}`);
-      return memoryClientNotes.filter(n => n.registrationId === registrationId);
+      throw new Error(`Database error fetching notes: ${error.message}`);
     }
     return data || [];
   }
 
+  assertSupabaseInProduction();
   return memoryClientNotes.filter(n => n.registrationId === registrationId);
 }
 
@@ -1682,10 +1931,13 @@ export async function insertClientFollowup(data: {
       .select()
       .single();
 
-    if (error && isProduction) throw new Error(`Database error inserting followup: ${error.message}`);
-    if (inserted) return inserted;
+    if (error || !inserted) {
+      throw new Error(`Database error inserting followup: ${error?.message || 'Insert returned no data'}`);
+    }
+    return inserted;
   }
 
+  assertSupabaseInProduction();
   const followup = { id: `fup_${Date.now()}`, ...data, status: 'pending', createdAt: new Date().toISOString() };
   memoryClientFollowups.push(followup);
   return followup;
@@ -1699,12 +1951,12 @@ export async function getClientFollowups(registrationId?: string): Promise<any[]
     }
     const { data, error } = await query;
     if (error) {
-      if (isProduction) throw new Error(`Database error fetching followups: ${error.message}`);
-      return memoryClientFollowups.filter(f => !registrationId || f.registrationId === registrationId);
+      throw new Error(`Database error fetching followups: ${error.message}`);
     }
     return data || [];
   }
 
+  assertSupabaseInProduction();
   if (registrationId) {
     return memoryClientFollowups.filter(f => f.registrationId === registrationId);
   }

@@ -10,7 +10,7 @@ import { adminRouter } from './server/routes/admin.js';
 import { referralsRouter } from './server/routes/referrals.js';
 
 import { clientRouter } from './server/routes/client.js';
-import { checkDatabaseConnectivity } from './server/supabase.js';
+import { checkDatabaseConnectivity, getSupabaseConfigStatus } from './server/supabase.js';
 
 dotenv.config();
 
@@ -29,6 +29,7 @@ app.use(authMiddleware);
 // Health check with live database connectivity test
 app.get('/api/health', async (_req, res) => {
   const dbHealth = await checkDatabaseConnectivity();
+  const supaStatus = getSupabaseConfigStatus();
   res.json({
     status: dbHealth.connected ? 'operational' : 'degraded',
     network: 'R3 Global Affiliate Network & Client Coordination',
@@ -37,7 +38,9 @@ app.get('/api/health', async (_req, res) => {
     database: {
       connected: dbHealth.connected,
       latencyMs: dbHealth.latencyMs,
-      error: dbHealth.error || null
+      projectRef: supaStatus.projectRef,
+      configured: supaStatus.isConfigured,
+      error: dbHealth.error || supaStatus.configError || null
     },
     timestamp: new Date().toISOString()
   });

@@ -5,18 +5,20 @@ import {
   createReferralLead,
   recordAuditLog
 } from '../supabase.js';
-import { AuthenticatedRequest, requireAuth } from '../middleware/auth.js';
+import { AuthenticatedRequest, requireRoles } from '../middleware/auth.js';
 
 export const affiliatesRouter = Router();
 
+affiliatesRouter.use(requireRoles('affiliate', 'super_admin', 'affiliate_manager'));
+
 // Private Affiliate Portal Dashboard
-affiliatesRouter.get('/portal', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+affiliatesRouter.get('/portal', async (req: AuthenticatedRequest, res: Response) => {
   const user = req.user!;
 
   let targetAffiliateId = user.affiliateId;
 
-  // If administrator is previewing an affiliate, allow viewing specific affiliateId via query
-  if (user.role !== 'affiliate' && req.query.affiliateId) {
+  // Only authorized administrative governance roles may inspect another affiliateId via query
+  if ((user.role === 'super_admin' || user.role === 'affiliate_manager') && req.query.affiliateId) {
     targetAffiliateId = req.query.affiliateId as string;
   }
 
@@ -46,9 +48,10 @@ affiliatesRouter.get('/portal', requireAuth, async (req: AuthenticatedRequest, r
 });
 
 // Affiliate submits a lead introduction directly through their portal
-affiliatesRouter.post('/submit-lead', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+affiliatesRouter.post('/submit-lead', async (req: AuthenticatedRequest, res: Response) => {
   const user = req.user!;
-  const affiliateId = user.affiliateId || (user.role !== 'affiliate' ? req.body.affiliateId : null);
+  const isStaff = user.role === 'super_admin' || user.role === 'affiliate_manager';
+  const affiliateId = user.affiliateId || (isStaff ? req.body.affiliateId : null);
 
   if (!affiliateId) {
     return res.status(403).json({ error: 'Valid affiliate profile required to submit lead.' });

@@ -30,6 +30,11 @@ process.env.NODE_ENV = 'test';
 
 import http from 'http';
 import { app } from '../server.js';
+import {
+  extractProjectRef,
+  resolveSupabaseConfig,
+  setSupabaseAdminForTesting
+} from '../server/supabase.js';
 
 interface TestResult {
   name: string;
@@ -463,6 +468,204 @@ async function runSuite() {
       if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
       if (!Array.isArray(res.body.auditLogs) || res.body.auditLogs.length === 0) {
         throw new Error('Audit logs array empty or missing');
+      }
+    });
+
+    // 24. Supabase Configuration & Project Reference Resolution
+    await runTest('24. Supabase config rejects anon-key admin fallback and resolves mxzjanjdwnhonqensnsw dynamically', async () => {
+      if (extractProjectRef('https://mxzjanjdwnhonqensnsw.supabase.co') !== 'mxzjanjdwnhonqensnsw') {
+        throw new Error('Failed to extract project ref from Supabase URL');
+      }
+
+      // Missing secret key even when publishable/anon key exists must NOT mark server configured
+      const missingSecret = resolveSupabaseConfig({
+        SUPABASE_URL: 'https://mxzjanjdwnhonqensnsw.supabase.co',
+        VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test_only',
+        NODE_ENV: 'production'
+      }, true);
+      if (missingSecret.status.isConfigured || missingSecret.supabaseServiceKey) {
+        throw new Error('Server config must never fall back to publishable/anon key when secret key is missing');
+      }
+
+      // Missing SUPABASE_URL in production must NOT fall back to VITE_SUPABASE_URL
+      const missingServerUrl = resolveSupabaseConfig({
+        VITE_SUPABASE_URL: 'https://mxzjanjdwnhonqensnsw.supabase.co',
+        SUPABASE_SECRET_KEY: 'sb_secret_test_only',
+        NODE_ENV: 'production'
+      }, true);
+      if (missingServerUrl.status.isConfigured) {
+        throw new Error('Production config must require SUPABASE_URL rather than falling back to VITE_SUPABASE_URL');
+      }
+
+      // Valid server configuration
+      const valid = resolveSupabaseConfig({
+        SUPABASE_URL: 'https://mxzjanjdwnhonqensnsw.supabase.co',
+        SUPABASE_SECRET_KEY: 'sb_secret_test_only',
+        NODE_ENV: 'production'
+      }, true);
+      if (!valid.status.isConfigured || valid.status.projectRef !== 'mxzjanjdwnhonqensnsw') {
+        throw new Error('Valid server Supabase configuration failed verification');
+      }
+    });
+
+    // 25. Simulated DB Insert Failure on Affiliate Application
+    await runTest('25. Failed database insert on /api/applications returns 500 with no fabricated reference number', async () => {
+      const mockFailingClient: any = {
+        from: () => ({
+          select: () => ({
+            ilike: () => ({
+              order: async () => ({ data: [], error: null })
+            }),
+            eq: () => ({
+              order: () => ({
+                limit: () => ({
+                  maybeSingle: async () => ({ data: null, error: null })
+                })
+              }),
+              maybeSingle: async () => ({ data: null, error: null })
+            })
+          }),
+          insert: () => ({
+            select: () => ({
+              single: async () => ({ data: null, error: { message: 'Simulated PostgreSQL insert failure' } })
+            })
+          })
+        })
+      };
+
+      setSupabaseAdminForTesting(mockFailingClient);
+      try {
+        const res = await makeRequest(serverUrl, 'POST', '/api/applications', {
+          fullName: 'DB Failure Check Applicant',
+          applicantType: 'Individual',
+          email: `dbfail.${Date.now()}@test-partner.org`,
+          phone: '+1 (212) 555-0144',
+          country: 'United States (New York)',
+          partnershipCategory: 'wealth_advisory',
+          industryBackground: 'Twenty years advising U.S. institutional family offices and private fiduciary trustees.',
+          audienceDescription: 'North American private equity principals, family offices, and sovereign trustees.',
+          partnershipObjectives: 'Establish compliant bilateral referral arrangements for U.S. contingency retainers.',
+          termsAccepted: true,
+          privacyAccepted: true
+        });
+
+        if (res.status !== 500) {
+          throw new Error(`Expected HTTP 500 on DB insert failure, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+        if (!String(res.body.message || '').includes('Simulated PostgreSQL insert failure')) {
+          throw new Error(`Expected insert failure message, got: ${JSON.stringify(res.body)}`);
+        }
+        if (res.body.referenceNumber || res.body.success) {
+          throw new Error(`Endpoint fabricated referenceNumber or success on DB failure: ${JSON.stringify(res.body)}`);
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+    });
+
+    // 26. Simulated DB Insert Failure on Client Registration
+    await runTest('26. Failed database insert on /api/client/register returns 500 with no fabricated reference number', async () => {
+      const mockFailingClient: any = {
+        from: () => ({
+          select: () => ({
+            ilike: () => ({
+              order: async () => ({ data: [], error: null })
+            })
+          }),
+          insert: () => ({
+            select: () => ({
+              single: async () => ({ data: null, error: { message: 'Simulated CRM table insert failure' } })
+            })
+          })
+        })
+      };
+
+      setSupabaseAdminForTesting(mockFailingClient);
+      try {
+        const res = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+          fullName: 'CRM Failure Principal',
+          email: `crmfail.${Date.now()}@corporate-client.org`,
+          country: 'United States (Texas)',
+          serviceCategory: 'contingency_management'
+        });
+
+        if (res.status !== 500) {
+          throw new Error(`Expected HTTP 500 on CRM insert failure, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+        if (!String(res.body.message || '').includes('Simulated CRM table insert failure')) {
+          throw new Error(`Expected CRM insert failure message, got: ${JSON.stringify(res.body)}`);
+        }
+        if (res.body.referenceNumber || res.body.success) {
+          throw new Error(`Client register fabricated referenceNumber or success on DB failure: ${JSON.stringify(res.body)}`);
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+    });
+
+    // 27. Input Validation Checks
+    await runTest('27. Invalid registration payloads return 400 Bad Request with structured validation details', async () => {
+      const appRes = await makeRequest(serverUrl, 'POST', '/api/applications', {
+        fullName: 'A',
+        email: 'invalid-email'
+      });
+      if (appRes.status !== 400 || !appRes.body.details) {
+        throw new Error(`Expected 400 with details for invalid application, got ${appRes.status}`);
+      }
+
+      const clientRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: 'X',
+        email: 'bad'
+      });
+      if (clientRes.status !== 400 || !clientRes.body.details) {
+        throw new Error(`Expected 400 with details for invalid client registration, got ${clientRes.status}`);
+      }
+    });
+
+    // 28. Role Separation & Activation Takeover Prevention
+    await runTest('28. RBAC blocks clients from admin/affiliate routes and blocks re-activation takeover', async () => {
+      const adminRes = await makeRequest(serverUrl, 'GET', '/api/admin/overview', null, clientAuthHeader);
+      if (adminRes.status !== 403) {
+        throw new Error(`Expected 403 for client accessing /api/admin/overview, got ${adminRes.status}`);
+      }
+
+      const affRes = await makeRequest(
+        serverUrl,
+        'GET',
+        `/api/affiliates/portal?affiliateId=${activatedAffiliateId}`,
+        null,
+        clientAuthHeader
+      );
+      if (affRes.status !== 403) {
+        throw new Error(`Expected 403 for client accessing /api/affiliates/portal, got ${affRes.status}`);
+      }
+
+      const retakeRes = await makeRequest(serverUrl, 'POST', '/api/client/activate', {
+        email: clientEmail,
+        password: 'HijackAttemptPassword1!'
+      });
+      if (retakeRes.status !== 409) {
+        throw new Error(`Expected 409 Conflict preventing re-activation takeover, got ${retakeRes.status}`);
+      }
+    });
+
+    // 29. Strict Separation of Affiliate Applications vs Ordinary Client Registrations
+    await runTest('29. Admin endpoints strictly separate R3-APP Applications from R3-CLT Client CRM records', async () => {
+      const appsRes = await makeRequest(serverUrl, 'GET', '/api/admin/applications', null, adminAuthHeader);
+      const clientsRes = await makeRequest(serverUrl, 'GET', '/api/admin/client-registrations', null, adminAuthHeader);
+
+      if (appsRes.status !== 200 || clientsRes.status !== 200) {
+        throw new Error('Failed to fetch admin datasets for separation check');
+      }
+
+      const appsList = appsRes.body.applications || [];
+      const clientsList = clientsRes.body.registrations || [];
+
+      if (appsList.some((a: any) => String(a.referenceNumber).startsWith('R3-CLT-'))) {
+        throw new Error('Client registration leaked into affiliate applications queue');
+      }
+      if (clientsList.some((c: any) => String(c.referenceNumber).startsWith('R3-APP-'))) {
+        throw new Error('Affiliate application leaked into Client CRM queue');
       }
     });
 

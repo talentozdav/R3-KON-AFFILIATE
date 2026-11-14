@@ -1,17 +1,16 @@
 import { Router, Response } from 'express';
 import {
   supabaseAdmin,
-  supabasePublic,
+  signInWithSupabasePassword,
   isProduction,
   getAffiliateById,
-  getAffiliateByEmail,
   getAffiliateByUserId,
   getAffiliateApplicationByRef,
   createAffiliate,
   recordAuditLog
 } from '../supabase.js';
 import { AuthenticatedRequest } from '../middleware/auth.js';
-import { sendPasswordResetEmail, sendAffiliateApprovalActivation } from '../services/mailer.js';
+import { sendPasswordResetEmail } from '../services/mailer.js';
 
 export const authRouter = Router();
 
@@ -81,34 +80,62 @@ authRouter.post('/login', async (req: AuthenticatedRequest, res: Response) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   // 1. Authenticate through Supabase Auth
-  if (supabasePublic) {
+  if (supabaseAdmin) {
     try {
-      const { data, error } = await supabasePublic.auth.signInWithPassword({
-        email: normalizedEmail,
-        password
-      });
+      const signInResult = await signInWithSupabasePassword(normalizedEmail, password);
+      if (!signInResult) {
+        return res.status(500).json({
+          error: 'Authentication Unavailable',
+          message: 'Supabase authentication client could not be initialized.'
+        });
+      }
 
-      if (!error && data.user) {
-        let profile = null;
-        let role = (data.user.user_metadata?.role as any) || 'client';
+      const { data, error } = signInResult;
+
+      if (!error && data?.user && data?.session?.access_token) {
+        let profile: any = null;
+        let role: string | null = null;
         let affiliateData = null;
 
-        if (supabaseAdmin) {
-          const { data: p } = await supabaseAdmin.from('profiles').select('*').eq('id', data.user.id).maybeSingle();
-          if (p) {
-            profile = p;
-            role = p.role;
-            if (role === 'affiliate') {
-              const { data: aff } = await supabaseAdmin.from('affiliates').select('*').eq('user_id', data.user.id).maybeSingle();
-              affiliateData = aff;
-            }
-          } else {
-            const { data: cp } = await supabaseAdmin.from('client_profiles').select('*').eq('id', data.user.id).maybeSingle();
-            if (cp) {
-              profile = cp;
-              role = 'client';
-            }
+        const { data: p, error: pErr } = await supabaseAdmin
+          .from('profiles')
+          .select('*')
+          .eq('id', data.user.id)
+          .maybeSingle();
+
+        if (pErr) {
+          return res.status(500).json({ error: 'Database error verifying account profile', message: pErr.message });
+        }
+
+        if (p) {
+          profile = p;
+          role = p.role;
+          if (role === 'affiliate') {
+            const { data: aff } = await supabaseAdmin.from('affiliates').select('*').eq('user_id', data.user.id).maybeSingle();
+            affiliateData = aff;
           }
+        } else {
+          const { data: cp, error: cpErr } = await supabaseAdmin
+            .from('client_profiles')
+            .select('*')
+            .eq('id', data.user.id)
+            .maybeSingle();
+
+          if (cpErr) {
+            return res.status(500).json({ error: 'Database error verifying client profile', message: cpErr.message });
+          }
+
+          if (cp) {
+            profile = cp;
+            role = 'client';
+          }
+        }
+
+        if (!role || !profile || profile.status !== 'active') {
+          return res.status(403).json({
+            error: 'Account Inactive or Unprovisioned',
+            message: 'No active portal profile is assigned to this account.'
+          });
         }
 
         await recordAuditLog(
@@ -119,45 +146,41 @@ authRouter.post('/login', async (req: AuthenticatedRequest, res: Response) => {
           data.user.id,
           `Authenticated via Supabase Auth. Role: ${role}`,
           ip
-        );
+        ).catch(err => console.warn('[R3 Auth] Audit log notice:', err.message));
 
         return res.json({
           success: true,
-          token: data.session?.access_token || normalizedEmail,
+          token: data.session.access_token,
           user: {
             id: data.user.id,
             email: data.user.email,
-            fullName: profile?.full_name || data.user.user_metadata?.full_name || data.user.email,
+            fullName: profile.full_name || data.user.email,
             role,
-            status: profile?.status || 'active',
+            status: profile.status,
             affiliate: affiliateData,
             clientId: role === 'client' ? data.user.id : undefined,
-            membershipTier: profile?.membership_tier
+            membershipTier: profile.membership_tier
           }
         });
       }
 
-      if (error) {
-        return res.status(401).json({
-          error: 'Authentication failed',
-          message: error.message
-        });
-      }
+      return res.status(401).json({
+        error: 'Authentication failed',
+        message: error?.message || 'Invalid credentials.'
+      });
     } catch (err: any) {
-      if (isProduction) {
-        return res.status(500).json({ error: 'Authentication service error', message: err.message });
-      }
+      return res.status(500).json({ error: 'Authentication service error', message: err.message });
     }
   }
 
   if (isProduction) {
-    return res.status(401).json({
-      error: 'Invalid credentials',
-      message: 'No registered member or administrator account exists with this email address.'
+    return res.status(500).json({
+      error: 'Authentication Unavailable',
+      message: 'Server-side Supabase authentication is not configured in production.'
     });
   }
 
-  // Non-production test fallback
+  // Non-production test fallback when Supabase is not configured
   res.status(401).json({
     error: 'Invalid credentials',
     message: 'The email or password provided is incorrect.'
@@ -168,7 +191,7 @@ authRouter.post('/login', async (req: AuthenticatedRequest, res: Response) => {
 authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
   const { email, referenceNumber, password } = req.body;
 
-  if (!email || !referenceNumber || !password) {
+  if (!email || typeof email !== 'string' || !referenceNumber || typeof referenceNumber !== 'string' || !password) {
     return res.status(400).json({ error: 'Email, application reference number, and new password are required.' });
   }
 
@@ -196,10 +219,17 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
       });
     }
 
+    if (application.activatedAffiliateId) {
+      return res.status(409).json({
+        error: 'Application already activated',
+        message: 'This approved application has already been activated. Please sign in or use password recovery.'
+      });
+    }
+
     let token = '';
 
     if (supabaseAdmin) {
-      // 1. Create or update user in Supabase Auth
+      // 1. Create or retrieve user in Supabase Auth (preventing staff takeover)
       const { data: authUser, error: authErr } = await supabaseAdmin.auth.admin.createUser({
         email: normalizedEmail,
         password,
@@ -213,16 +243,35 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
       let userId = authUser?.user?.id;
 
       if (authErr) {
-        // If user already exists in auth, update password and metadata
-        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+        const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers();
+        if (listErr) {
+          return res.status(500).json({ error: `Failed to inspect existing auth records: ${listErr.message}` });
+        }
         const existing = listData?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
         if (existing) {
+          const { data: existingProfile } = await supabaseAdmin
+            .from('profiles')
+            .select('role')
+            .eq('id', existing.id)
+            .maybeSingle();
+
+          const protectedRoles = ['super_admin', 'affiliate_manager', 'finance_manager', 'compliance_officer'];
+          if (existingProfile && protectedRoles.includes(existingProfile.role)) {
+            return res.status(403).json({
+              error: 'Account Conflict',
+              message: 'Cannot activate an affiliate account over a privileged governance email address.'
+            });
+          }
+
           userId = existing.id;
-          await supabaseAdmin.auth.admin.updateUserById(userId, {
+          const { error: updErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
             password,
             email_confirm: true,
             user_metadata: { role: 'affiliate', full_name: application.fullName }
           });
+          if (updErr) {
+            return res.status(500).json({ error: `Failed to update auth credentials: ${updErr.message}` });
+          }
         } else {
           return res.status(400).json({ error: `Failed to create auth credentials: ${authErr.message}` });
         }
@@ -233,7 +282,7 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
       }
 
       // 2. Upsert profile in public.profiles table
-      await supabaseAdmin.from('profiles').upsert({
+      const { error: profileErr } = await supabaseAdmin.from('profiles').upsert({
         id: userId,
         email: normalizedEmail,
         full_name: application.fullName,
@@ -241,6 +290,10 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
         status: 'active',
         updated_at: new Date().toISOString()
       });
+
+      if (profileErr) {
+        throw new Error(`Database error saving partner profile: ${profileErr.message}`);
+      }
 
       // 3. Create or find affiliate partner record
       let affiliate = await getAffiliateByUserId(userId);
@@ -256,8 +309,8 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
         });
       }
 
-      // 4. Update application status with activated affiliate id
-      await supabaseAdmin
+      // 4. Update application with activated affiliate id
+      const { error: appUpdErr } = await supabaseAdmin
         .from('affiliate_applications')
         .update({
           activated_affiliate_id: affiliate.id,
@@ -265,15 +318,18 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
         })
         .eq('id', application.id);
 
-      // Sign in or generate session token
-      if (supabasePublic) {
-        const { data: sessionData } = await supabasePublic.auth.signInWithPassword({
-          email: normalizedEmail,
-          password
+      if (appUpdErr) {
+        throw new Error(`Database error linking activated affiliate: ${appUpdErr.message}`);
+      }
+
+      // 5. Generate real Supabase Auth session token
+      const signInResult = await signInWithSupabasePassword(normalizedEmail, password);
+      token = signInResult?.data?.session?.access_token || '';
+      if (!token) {
+        return res.status(500).json({
+          error: 'Session Issuance Failed',
+          message: 'Account was activated in the database, but a login session could not be issued. Please sign in manually.'
         });
-        token = sessionData.session?.access_token || normalizedEmail;
-      } else {
-        token = normalizedEmail;
       }
 
       await recordAuditLog(
@@ -284,7 +340,7 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
         affiliate.id,
         `Partner account activated for ${application.referenceNumber} (${affiliate.referralCode})`,
         req.ip
-      );
+      ).catch(err => console.warn('[R3 Affiliate Activation] Audit log notice:', err.message));
 
       return res.json({
         success: true,
@@ -325,7 +381,7 @@ authRouter.post('/forgot-password', async (req: AuthenticatedRequest, res: Respo
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon.vercel.app';
+  const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
 
   try {
     if (supabaseAdmin) {
@@ -337,12 +393,12 @@ authRouter.post('/forgot-password', async (req: AuthenticatedRequest, res: Respo
         }
       });
 
-      const resetUrl = data?.properties?.action_link || `${origin}/reset-password?email=${encodeURIComponent(normalizedEmail)}`;
-
-      await sendPasswordResetEmail({
-        email: normalizedEmail,
-        resetUrl
-      });
+      if (!error && data?.properties?.action_link) {
+        await sendPasswordResetEmail({
+          email: normalizedEmail,
+          resetUrl: data.properties.action_link
+        });
+      }
     }
 
     res.json({

@@ -147,7 +147,7 @@ applicationsRouter.post('/', async (req: Request, res: Response) => {
       privacyAccepted: true
     });
 
-    // 3. Record audit log
+    // 3. Record audit log (non-blocking if audit table write experiences transient warning)
     await recordAuditLog(
       normalizedEmail,
       'affiliate',
@@ -156,16 +156,22 @@ applicationsRouter.post('/', async (req: Request, res: Response) => {
       application.id,
       `New partnership application submitted: ${application.referenceNumber} (${applicantType}${businessName ? ` - ${businessName}` : ''})`,
       ip
-    );
-
-    // 4. Send Confirmation Email via Resend
-    sendAffiliateRegistrationConfirmation({
-      email: normalizedEmail,
-      fullName: application.fullName,
-      referenceNumber: application.referenceNumber
-    }).catch(err => {
-      console.warn('[R3 Applications] Non-blocking email notice:', err.message);
+    ).catch(err => {
+      console.warn('[R3 Applications] Audit log warning after application commit:', err.message);
     });
+
+    // 4. Send Confirmation Email via Resend (never mask a successful DB save as a registration failure)
+    let emailSent = false;
+    try {
+      const emailResult = await sendAffiliateRegistrationConfirmation({
+        email: normalizedEmail,
+        fullName: application.fullName,
+        referenceNumber: application.referenceNumber
+      });
+      emailSent = emailResult.success;
+    } catch (mailErr: any) {
+      console.warn('[R3 Applications] Confirmation email notice:', mailErr.message);
+    }
 
     res.status(201).json({
       success: true,
@@ -174,6 +180,7 @@ applicationsRouter.post('/', async (req: Request, res: Response) => {
       status: application.status,
       submittedAt: application.submittedAt,
       applicantName: application.fullName,
+      emailSent,
       application
     });
   } catch (err: any) {

@@ -33,8 +33,9 @@ import {
   getAuditLogs,
   recordAuditLog,
   bootstrapAdminUser,
-  supabaseAdmin,
-  supabasePublic
+  signInWithSupabasePassword,
+  isProduction,
+  supabaseAdmin
 } from '../supabase.js';
 import { sendClientAccountInvitation, sendAffiliateApprovalActivation } from '../services/mailer.js';
 
@@ -99,70 +100,91 @@ adminRouter.post('/bootstrap', async (req: Request, res: Response) => {
 adminRouter.post('/login', async (req: Request, res: Response) => {
   const { email, password } = req.body;
 
-  if (!email || !password) {
+  if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
     return res.status(400).json({ error: 'Email and security key/password are required.' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+  const validAdminRoles = ['super_admin', 'affiliate_manager', 'finance_manager'];
 
-  // 1. Supabase Auth check
-  if (supabasePublic) {
+  // 1. Supabase Auth check (required whenever Supabase is configured or in production)
+  if (supabaseAdmin) {
     try {
-      const { data, error } = await supabasePublic.auth.signInWithPassword({
-        email: normalizedEmail,
-        password
-      });
+      const signInResult = await signInWithSupabasePassword(normalizedEmail, password);
 
-      if (!error && data.user) {
-        // Query profile for admin role verification
-        let profile = null;
-        if (supabaseAdmin) {
-          const { data: p } = await supabaseAdmin
-            .from('profiles')
-            .select('*')
-            .eq('id', data.user.id)
-            .maybeSingle();
-          profile = p;
-        }
-
-        const role = profile?.role || data.user.user_metadata?.role;
-        const validAdminRoles = ['super_admin', 'affiliate_manager', 'finance_manager'];
-
-        if (!validAdminRoles.includes(role)) {
-          return res.status(403).json({
-            error: 'Unauthorized Role',
-            message: 'Your account does not possess administrative clearance.'
-          });
-        }
-
-        await recordAuditLog(
-          normalizedEmail,
-          role,
-          'ADMIN_LOGIN',
-          'auth',
-          data.user.id,
-          `Admin Supabase login verified for role: ${role}`,
-          req.ip
-        );
-
-        return res.json({
-          success: true,
-          token: data.session?.access_token || normalizedEmail,
-          user: {
-            id: data.user.id,
-            email: data.user.email,
-            fullName: profile?.full_name || data.user.user_metadata?.full_name || 'Admin Officer',
-            role,
-            status: profile?.status || 'active'
-          }
+      if (!signInResult) {
+        return res.status(500).json({
+          error: 'Authentication Unavailable',
+          message: 'Supabase authentication client could not be initialized.'
         });
       }
+
+      const { data, error } = signInResult;
+      if (error || !data?.user || !data?.session?.access_token) {
+        return res.status(401).json({
+          error: 'Invalid Credentials',
+          message: error?.message || 'Authentication failed.'
+        });
+      }
+
+      const { data: profile, error: profileErr } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (profileErr) {
+        return res.status(500).json({
+          error: 'Authorization Verification Failed',
+          message: `Database error verifying administrative role: ${profileErr.message}`
+        });
+      }
+
+      const role = profile?.role;
+      if (!profile || !validAdminRoles.includes(role) || profile.status !== 'active') {
+        return res.status(403).json({
+          error: 'Unauthorized Role',
+          message: 'Your account does not possess active administrative clearance.'
+        });
+      }
+
+      await recordAuditLog(
+        normalizedEmail,
+        role,
+        'ADMIN_LOGIN',
+        'auth',
+        data.user.id,
+        `Admin Supabase login verified for role: ${role}`,
+        req.ip
+      ).catch(err => console.warn('[Admin Auth] Audit log notice:', err.message));
+
+      return res.json({
+        success: true,
+        token: data.session.access_token,
+        user: {
+          id: data.user.id,
+          email: data.user.email,
+          fullName: profile.full_name || 'Admin Officer',
+          role,
+          status: profile.status
+        }
+      });
     } catch (err: any) {
-      console.warn('[Admin Auth] Supabase check notice:', err.message);
+      return res.status(500).json({
+        error: 'Authentication Error',
+        message: err.message || 'Unable to verify administrative credentials.'
+      });
     }
   }
 
-  // 2. Memory database fallback (for local development only)
+  if (isProduction) {
+    return res.status(500).json({
+      error: 'Authentication Unavailable',
+      message: 'Server-side Supabase credentials are not configured in production.'
+    });
+  }
+
+  // 2. Memory database fallback (for local development/test only when Supabase is not configured)
   const user = db.users.find(u => u.email.toLowerCase() === normalizedEmail);
   if (!user) {
     return res.status(401).json({
@@ -171,7 +193,6 @@ adminRouter.post('/login', async (req: Request, res: Response) => {
     });
   }
 
-  const validAdminRoles = ['super_admin', 'affiliate_manager', 'finance_manager'];
   if (!validAdminRoles.includes(user.role)) {
     return res.status(403).json({
       error: 'Unauthorized Role',
@@ -266,6 +287,11 @@ adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin',
   const { id } = req.params;
   const { status } = req.body;
 
+  const validClientStatuses = ['PENDING', 'IN_REVIEW', 'APPROVED', 'DECLINED', 'ARCHIVED'];
+  if (!validClientStatuses.includes(status)) {
+    return res.status(400).json({ error: `Invalid client status. Must be one of: ${validClientStatuses.join(', ')}` });
+  }
+
   try {
     await updateClientRegistrationStatus(id, status);
     await recordAuditLog(
@@ -294,7 +320,7 @@ adminRouter.post('/client-registrations/:id/resend-invite', requireRoles('super_
       return res.status(404).json({ error: 'Registration record not found.' });
     }
 
-    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon.vercel.app';
+    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
     const invitationUrl = `${origin}/client-portal?mode=activate&ref=${reg.referenceNumber}&email=${encodeURIComponent(reg.email)}`;
 
     const emailResult = await sendClientAccountInvitation({
@@ -471,42 +497,53 @@ adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affi
       return res.status(400).json({ error: 'An active affiliate profile already exists for this candidate.' });
     }
 
+    const parsedRate = approvedRatePercent !== undefined ? Number(approvedRatePercent) : 10.0;
+    if (!Number.isFinite(parsedRate) || parsedRate <= 0 || parsedRate > 100) {
+      return res.status(400).json({ error: 'Approved rate percent must be a valid number between 0 and 100.' });
+    }
+
     const referralCode = customCode ? customCode.trim().toUpperCase() : `${app.fullName.split(' ').pop()?.toUpperCase() || 'PARTNER'}-R3`;
     let userId = `usr_${Date.now()}`;
 
     // If Supabase Auth is enabled, create or retrieve user in Supabase
     if (supabaseAdmin) {
-      try {
-        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
-        const existingAuth = listData?.users?.find(u => u.email?.toLowerCase() === app.email.toLowerCase());
-        if (existingAuth) {
-          userId = existingAuth.id;
-          await supabaseAdmin.auth.admin.updateUserById(userId, {
-            user_metadata: { role: 'affiliate', full_name: app.fullName }
-          });
-        } else {
-          const tempPassword = `R3Affiliate!${Math.floor(100000 + Math.random() * 900000)}`;
-          const { data: newAuth } = await supabaseAdmin.auth.admin.createUser({
-            email: app.email.toLowerCase(),
-            password: tempPassword,
-            email_confirm: true,
-            user_metadata: { role: 'affiliate', full_name: app.fullName }
-          });
-          if (newAuth?.user) {
-            userId = newAuth.user.id;
-          }
-        }
-
-        // Upsert profile
-        await supabaseAdmin.from('profiles').upsert({
-          id: userId,
-          email: app.email.toLowerCase(),
-          full_name: app.fullName,
-          role: 'affiliate',
-          status: 'active'
+      const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers();
+      if (listErr) {
+        throw new Error(`Supabase Auth lookup failed: ${listErr.message}`);
+      }
+      const existingAuth = listData?.users?.find(u => u.email?.toLowerCase() === app.email.toLowerCase());
+      if (existingAuth) {
+        userId = existingAuth.id;
+        const { error: updAuthErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+          user_metadata: { role: 'affiliate', full_name: app.fullName }
         });
-      } catch (authErr: any) {
-        console.warn('[Admin Activation] Auth link note:', authErr.message);
+        if (updAuthErr) {
+          throw new Error(`Supabase Auth metadata update failed: ${updAuthErr.message}`);
+        }
+      } else {
+        const tempPassword = `R3Affiliate!${Math.floor(100000 + Math.random() * 900000)}`;
+        const { data: newAuth, error: createAuthErr } = await supabaseAdmin.auth.admin.createUser({
+          email: app.email.toLowerCase(),
+          password: tempPassword,
+          email_confirm: true,
+          user_metadata: { role: 'affiliate', full_name: app.fullName }
+        });
+        if (createAuthErr || !newAuth?.user) {
+          throw new Error(`Supabase Auth user creation failed: ${createAuthErr?.message || 'No user returned'}`);
+        }
+        userId = newAuth.user.id;
+      }
+
+      // Upsert profile
+      const { error: profileErr } = await supabaseAdmin.from('profiles').upsert({
+        id: userId,
+        email: app.email.toLowerCase(),
+        full_name: app.fullName,
+        role: 'affiliate',
+        status: 'active'
+      });
+      if (profileErr) {
+        throw new Error(`Database error saving affiliate profile: ${profileErr.message}`);
       }
     }
 
@@ -516,19 +553,22 @@ adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affi
       email: app.email,
       businessName: app.businessName,
       referralCode,
-      approvedRatePercent: approvedRatePercent ? Number(approvedRatePercent) : 10.0
+      approvedRatePercent: parsedRate
     });
 
     // Mark application activated
     if (supabaseAdmin) {
-      await supabaseAdmin
+      const { error: appUpdErr } = await supabaseAdmin
         .from('affiliate_applications')
         .update({ activated_affiliate_id: newAffiliate.id, updated_at: new Date().toISOString() })
         .eq('id', app.id);
+      if (appUpdErr) {
+        throw new Error(`Database error linking activated affiliate to application: ${appUpdErr.message}`);
+      }
     }
 
-    // Dispatch welcome / activation notification
-    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon.vercel.app';
+    // Dispatch welcome / activation notification (non-blocking if mailer unavailable)
+    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
     sendAffiliateApprovalActivation({
       email: app.email,
       fullName: app.fullName,
@@ -633,16 +673,17 @@ adminRouter.post('/conversions/create', requireRoles('super_admin', 'finance_man
     verificationNotes
   } = req.body;
 
-  if (!affiliateId || !membershipTierOrCategory || !eligibleSaleAmount) {
-    return res.status(400).json({ error: 'Affiliate ID, category, and eligible amount are required.' });
+  const parsedSaleAmount = Number(eligibleSaleAmount);
+  if (!affiliateId || !membershipTierOrCategory || !Number.isFinite(parsedSaleAmount) || parsedSaleAmount <= 0) {
+    return res.status(400).json({ error: 'Affiliate ID, category, and a positive eligible sale amount are required.' });
   }
 
   try {
     const conversion = await createConversion({
       affiliateId,
       leadId: leadId || undefined,
-      membershipTierOrCategory,
-      eligibleSaleAmount: Number(eligibleSaleAmount),
+      membershipTierOrCategory: String(membershipTierOrCategory).trim(),
+      eligibleSaleAmount: parsedSaleAmount,
       verificationNotes: verificationNotes?.trim() || 'Verified against executed contingency contract and bank settlement.',
       verifiedBy: req.user!.fullName
     });
@@ -702,11 +743,19 @@ adminRouter.post('/commissions/generate', requireRoles('super_admin', 'finance_m
     return res.status(400).json({ error: 'Conversion ID is required.' });
   }
 
+  let parsedCustomRate: number | undefined;
+  if (customRate !== undefined && customRate !== null && customRate !== '') {
+    parsedCustomRate = Number(customRate);
+    if (!Number.isFinite(parsedCustomRate) || parsedCustomRate <= 0 || parsedCustomRate > 100) {
+      return res.status(400).json({ error: 'Custom rate must be a valid percentage between 0 and 100.' });
+    }
+  }
+
   try {
     const newCommission = await generateCommission({
       conversionId,
       ruleId,
-      customRate: customRate !== undefined && customRate !== null ? Number(customRate) : undefined,
+      customRate: parsedCustomRate,
       approvedBy: req.user!.fullName
     });
 
@@ -770,16 +819,22 @@ adminRouter.get('/commission-rules', requireRoles('super_admin', 'finance_manage
 adminRouter.post('/commission-rules', requireRoles('super_admin', 'finance_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { name, serviceCategory, ratePercent, description, status } = req.body;
 
-  if (!name || !serviceCategory || !ratePercent) {
-    return res.status(400).json({ error: 'Rule name, service category, and rate percent are required.' });
+  const parsedRuleRate = Number(ratePercent);
+  if (!name || typeof name !== 'string' || !serviceCategory || typeof serviceCategory !== 'string' || !Number.isFinite(parsedRuleRate) || parsedRuleRate <= 0 || parsedRuleRate > 100) {
+    return res.status(400).json({ error: 'Rule name, service category, and a valid rate percent (0-100) are required.' });
+  }
+
+  const ruleStatus = status || 'inactive';
+  if (!['active', 'inactive', 'draft'].includes(ruleStatus)) {
+    return res.status(400).json({ error: 'Rule status must be active, inactive, or draft.' });
   }
 
   try {
     const rule = await createCommissionRule({
       name: name.trim(),
       serviceCategory: serviceCategory.trim(),
-      ratePercent: Number(ratePercent),
-      status: status || 'inactive',
+      ratePercent: parsedRuleRate,
+      status: ruleStatus,
       description: description?.trim() || '',
       approvedBy: req.user!.fullName
     });

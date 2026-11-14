@@ -2,27 +2,27 @@ import { Router, Request, Response } from 'express';
 import {
   insertClientRegistration,
   getClientRegistrations,
+  getClientRegistrationByEmail,
   updateClientRegistrationInvitation,
   insertClientInquiry,
   getClientInquiries,
   getAffiliateByCode,
   createReferralLead,
   recordAuditLog,
+  signInWithSupabasePassword,
   supabaseAdmin,
-  supabasePublic,
   isProduction
 } from '../supabase.js';
 import {
   sendClientAccountInvitation,
-  sendClientActivationConfirmation,
-  sendClientRegistrationConfirmation
+  sendClientActivationConfirmation
 } from '../services/mailer.js';
 import { AuthenticatedRequest, requireAuth, requireRoles } from '../middleware/auth.js';
 import crypto from 'crypto';
 
 export const clientRouter = Router();
 
-// In-memory token store for client account invitations when running without Supabase service role in local dev
+// Development-only in-memory token store when running without Supabase service credentials
 const clientActivationTokens: Map<string, { email: string; registrationId: string; expiresAt: number }> = new Map();
 
 /**
@@ -55,11 +55,11 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       errors.email = 'Valid business or personal email is required.';
     }
 
-    if (!country || typeof country !== 'string') {
+    if (!country || typeof country !== 'string' || country.trim().length < 2) {
       errors.country = 'U.S. state or primary jurisdiction is required.';
     }
 
-    if (!serviceCategory || typeof serviceCategory !== 'string') {
+    if (!serviceCategory || typeof serviceCategory !== 'string' || serviceCategory.trim().length < 2) {
       errors.serviceCategory = 'Service interest category is required.';
     }
 
@@ -72,11 +72,8 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Check for existing active registration
-    const existing = await getClientRegistrations();
-    const duplicate = existing.find(
-      r => r.email.toLowerCase() === normalizedEmail && r.status !== 'DECLINED' && r.status !== 'ARCHIVED'
-    );
+    // Check for existing active registration in persistent storage
+    const duplicate = await getClientRegistrationByEmail(normalizedEmail);
     if (duplicate) {
       return res.status(409).json({
         error: 'Duplicate Registration',
@@ -85,26 +82,41 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    // 1. Save to Supabase CRM (client_registrations)
+    // 1. Save permanently to Supabase CRM (public.client_registrations)
     const registration = await insertClientRegistration({
       fullName: fullName.trim(),
       email: normalizedEmail,
-      phone: phone ? phone.trim() : undefined,
-      company: company ? company.trim() : undefined,
+      phone: phone ? String(phone).trim() : undefined,
+      company: company ? String(company).trim() : undefined,
       country: country.trim(),
       serviceCategory: serviceCategory.trim(),
-      requirementsBrief: requirementsBrief ? requirementsBrief.trim() : undefined,
-      referralCode: referralCode ? referralCode.trim().toUpperCase() : undefined
+      requirementsBrief: requirementsBrief ? String(requirementsBrief).trim() : undefined,
+      referralCode: referralCode ? String(referralCode).trim().toUpperCase() : undefined
+    });
+
+    // Record linked client inquiry if brief/category provided (non-fatal if auxiliary record logs warning)
+    await insertClientInquiry({
+      registrationId: registration.id,
+      clientName: fullName.trim(),
+      email: normalizedEmail,
+      phone: phone ? String(phone).trim() : undefined,
+      organization: company ? String(company).trim() : undefined,
+      country: country.trim(),
+      serviceInterest: serviceCategory.trim(),
+      briefSummary: requirementsBrief ? String(requirementsBrief).trim() : undefined,
+      priority: 'high'
+    }).catch(inqErr => {
+      console.warn('[R3 Client Register] Linked inquiry record notice:', inqErr.message);
     });
 
     // 2. If attributed via affiliate referral code, register lead in permanent affiliate tracking
-    if (referralCode) {
+    if (referralCode && typeof referralCode === 'string' && referralCode.trim()) {
       try {
         const cleanCode = referralCode.trim().toUpperCase();
         const affiliate = await getAffiliateByCode(cleanCode);
         if (affiliate && affiliate.status === 'active') {
           const maskedClient = company
-            ? `${company.trim()} (${country.trim()})`
+            ? `${String(company).trim()} (${country.trim()})`
             : `Private Principal (${country.trim()})`;
 
           const leadRecord = await createReferralLead({
@@ -125,17 +137,16 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
             leadRecord.id,
             `Client registration ${registration.referenceNumber} attributed to affiliate ${affiliate.affiliateNumber}`,
             req.ip
-          );
+          ).catch(err => console.warn('[R3 Client Register] Lead audit notice:', err.message));
         }
       } catch (attErr: any) {
         console.warn('[R3 Client Register] Lead attribution notice:', attErr.message);
       }
     }
 
-    // 3. Initiate Account Creation Invitation immediately via Resend
-    let invitationUrl = '';
-    let emailSent = false;
-    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon.vercel.app';
+    // 3. Initiate Account Creation Invitation via Resend (failures here must NOT report DB registration failure)
+    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
+    let invitationUrl = `${origin}/client-portal?mode=activate&ref=${registration.referenceNumber}&email=${encodeURIComponent(normalizedEmail)}`;
 
     if (supabaseAdmin) {
       try {
@@ -151,22 +162,15 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
           }
         });
 
-        if (linkErr) {
+        if (!linkErr && linkData?.properties?.action_link) {
+          invitationUrl = linkData.properties.action_link;
+        } else if (linkErr) {
           console.warn('[R3 Client Register] Supabase generateLink notice:', linkErr.message);
-          const token = crypto.randomBytes(32).toString('hex');
-          clientActivationTokens.set(token, {
-            email: normalizedEmail,
-            registrationId: registration.id,
-            expiresAt: Date.now() + 86400000 // 24 hours
-          });
-          invitationUrl = `${origin}/client-portal?action=activate&token=${token}&email=${encodeURIComponent(normalizedEmail)}&ref=${registration.referenceNumber}`;
-        } else {
-          invitationUrl = linkData.properties?.action_link || `${origin}/client-portal?mode=activate&ref=${registration.referenceNumber}`;
         }
       } catch (err: any) {
-        console.error('[R3 Client Register] Auth invitation error:', err.message);
+        console.warn('[R3 Client Register] Auth invitation notice:', err.message);
       }
-    } else {
+    } else if (!isProduction) {
       const token = crypto.randomBytes(32).toString('hex');
       clientActivationTokens.set(token, {
         email: normalizedEmail,
@@ -176,22 +180,31 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       invitationUrl = `${origin}/client-portal?action=activate&token=${token}&email=${encodeURIComponent(normalizedEmail)}&ref=${registration.referenceNumber}`;
     }
 
-    // 4. Send Transactional Invitation Email
-    const emailResult = await sendClientAccountInvitation({
-      email: normalizedEmail,
-      fullName: fullName.trim(),
-      invitationUrl,
-      referenceNumber: registration.referenceNumber
-    });
+    // 4. Send Transactional Invitation Email safely
+    let emailSent = false;
+    let emailError: string | undefined;
+    try {
+      const emailResult = await sendClientAccountInvitation({
+        email: normalizedEmail,
+        fullName: fullName.trim(),
+        invitationUrl,
+        referenceNumber: registration.referenceNumber
+      });
+      emailSent = emailResult.success;
+      emailError = emailResult.error;
+    } catch (mailErr: any) {
+      emailError = mailErr.message;
+      console.warn('[R3 Client Register] Email dispatch warning:', mailErr.message);
+    }
 
-    emailSent = emailResult.success;
-
-    // Update registration invitation status in database
+    // Update registration invitation status in database (non-fatal if status update fails after registration insert)
     await updateClientRegistrationInvitation(
       registration.id,
       emailSent ? 'sent' : 'failed',
-      emailResult.error
-    );
+      emailError
+    ).catch(updErr => {
+      console.warn('[R3 Client Register] Invitation status update notice:', updErr.message);
+    });
 
     res.status(201).json({
       success: true,
@@ -222,85 +235,135 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
  * Client completes account creation by setting their security password and activating Supabase Auth account.
  */
 clientRouter.post('/activate', async (req: Request, res: Response) => {
-  const { email, password, token, referenceNumber } = req.body;
+  const { email, password, referenceNumber } = req.body;
 
-  if (!email || !password) {
+  if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
-  if (typeof password !== 'string' || password.length < 8) {
+  if (password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters in length.' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    if (supabaseAdmin) {
-      // 1. Create or update user in Supabase Auth
-      const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
-        email: normalizedEmail,
-        password,
-        email_confirm: true,
-        user_metadata: {
-          role: 'client'
-        }
+    // Verify a valid, non-declined, unactivated client registration exists before setting password
+    const registration = await getClientRegistrationByEmail(normalizedEmail);
+    if (!registration) {
+      return res.status(404).json({
+        error: 'Registration Not Found',
+        message: 'No active client registration was found for this email address.'
       });
+    }
 
-      let userId = authData?.user?.id;
+    if (referenceNumber && typeof referenceNumber === 'string' && referenceNumber.trim().toUpperCase() !== registration.referenceNumber.toUpperCase()) {
+      return res.status(400).json({
+        error: 'Reference Mismatch',
+        message: 'The supplied registration reference number does not match this email address.'
+      });
+    }
 
-      if (authErr) {
-        // If user already exists in auth, update their password and confirm email
-        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
-        const existing = listData?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
-        if (existing) {
-          userId = existing.id;
-          await supabaseAdmin.auth.admin.updateUserById(userId, {
-            password,
-            email_confirm: true
+    if (registration.invitationStatus === 'accepted' || registration.accountActivatedAt) {
+      return res.status(409).json({
+        error: 'Account Already Activated',
+        message: 'This client portal account has already been activated. Please sign in or request password recovery.'
+      });
+    }
+
+    if (supabaseAdmin) {
+      // Check if an existing user in profiles holds a non-client role (prevent account takeover)
+      const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers();
+      if (listErr) {
+        throw new Error(`Auth lookup error: ${listErr.message}`);
+      }
+
+      const existing = listData?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
+      let userId = existing?.id;
+
+      if (existing) {
+        const { data: staffProfile } = await supabaseAdmin
+          .from('profiles')
+          .select('role')
+          .eq('id', existing.id)
+          .maybeSingle();
+
+        if (staffProfile) {
+          return res.status(403).json({
+            error: 'Account Conflict',
+            message: 'This email address belongs to an existing staff or affiliate account and cannot be activated via client onboarding.'
           });
-        } else {
-          return res.status(400).json({ error: authErr.message });
         }
+
+        const { error: updErr } = await supabaseAdmin.auth.admin.updateUserById(existing.id, {
+          password,
+          email_confirm: true,
+          user_metadata: { role: 'client', full_name: registration.fullName }
+        });
+        if (updErr) {
+          throw new Error(`Failed to activate client credentials: ${updErr.message}`);
+        }
+      } else {
+        const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+          email: normalizedEmail,
+          password,
+          email_confirm: true,
+          user_metadata: {
+            role: 'client',
+            full_name: registration.fullName
+          }
+        });
+
+        if (authErr || !authData?.user) {
+          return res.status(400).json({ error: authErr?.message || 'Failed to create client user.' });
+        }
+        userId = authData.user.id;
+      }
+
+      if (!userId) {
+        throw new Error('Unable to establish client user ID.');
       }
 
       // 2. Upsert client profile
-      if (userId) {
-        await supabaseAdmin.from('client_profiles').upsert({
-          id: userId,
-          email: normalizedEmail,
-          full_name: req.body.fullName || 'Client Member',
-          membership_tier: 'Executive Contingency Retainer',
-          status: 'active'
-        });
-
-        // 3. Update registration status in client_registrations
-        await supabaseAdmin
-          .from('client_registrations')
-          .update({
-            invitation_status: 'accepted',
-            account_activated_at: new Date().toISOString(),
-            user_id: userId,
-            status: 'APPROVED'
-          })
-          .eq('email', normalizedEmail);
+      const { error: cpErr } = await supabaseAdmin.from('client_profiles').upsert({
+        id: userId,
+        email: normalizedEmail,
+        full_name: req.body.fullName?.trim() || registration.fullName || 'Client Member',
+        membership_tier: 'Executive Contingency Retainer',
+        status: 'active'
+      });
+      if (cpErr) {
+        throw new Error(`Database error saving client profile: ${cpErr.message}`);
       }
 
-      // 4. Send confirmation email
+      // 3. Update registration status in client_registrations
+      const { error: regUpdErr } = await supabaseAdmin
+        .from('client_registrations')
+        .update({
+          invitation_status: 'accepted',
+          account_activated_at: new Date().toISOString(),
+          user_id: userId,
+          status: 'APPROVED'
+        })
+        .eq('id', registration.id);
+      if (regUpdErr) {
+        throw new Error(`Database error updating registration activation status: ${regUpdErr.message}`);
+      }
+
+      // 4. Send confirmation email safely
       sendClientActivationConfirmation({
         email: normalizedEmail,
-        fullName: req.body.fullName || 'Valued Client'
-      }).catch(console.error);
+        fullName: req.body.fullName?.trim() || registration.fullName || 'Valued Client'
+      }).catch(err => console.warn('[R3 Client Activate] Confirmation email notice:', err.message));
 
       // 5. Generate authentic Supabase Auth session token
-      let sessionToken = normalizedEmail;
-      if (supabasePublic) {
-        const { data: sessionData } = await supabasePublic.auth.signInWithPassword({
-          email: normalizedEmail,
-          password
+      const signInResult = await signInWithSupabasePassword(normalizedEmail, password);
+      const sessionToken = signInResult?.data?.session?.access_token;
+      if (!sessionToken) {
+        return res.status(500).json({
+          error: 'Session Issuance Failed',
+          message: 'Client account activated, but session token could not be issued. Please sign in.'
         });
-        if (sessionData?.session?.access_token) {
-          sessionToken = sessionData.session.access_token;
-        }
       }
 
       return res.json({
@@ -317,7 +380,8 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
       });
     }
 
-    // Local in-memory fallback for development test fixtures
+    // Local in-memory fallback for development/test fixtures
+    await updateClientRegistrationInvitation(registration.id, 'accepted');
     res.json({
       success: true,
       message: 'Account activated successfully (development test mode).',
@@ -335,47 +399,59 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
 clientRouter.post('/login', async (req: Request, res: Response) => {
   const { email, password } = req.body;
 
-  if (!email || !password) {
+  if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    if (supabasePublic) {
-      const { data, error } = await supabasePublic.auth.signInWithPassword({
-        email: normalizedEmail,
-        password
-      });
-
-      if (error) {
-        return res.status(401).json({
-          error: 'Authentication failed',
-          message: error.message
+    if (supabaseAdmin) {
+      const signInResult = await signInWithSupabasePassword(normalizedEmail, password);
+      if (!signInResult) {
+        return res.status(500).json({
+          error: 'Authentication Unavailable',
+          message: 'Authentication service client could not be initialized.'
         });
       }
 
-      // Fetch client profile
-      let clientProfile = null;
-      if (supabaseAdmin && data.user) {
-        const { data: p } = await supabaseAdmin
-          .from('client_profiles')
-          .select('*')
-          .eq('id', data.user.id)
-          .maybeSingle();
-        clientProfile = p;
+      const { data, error } = signInResult;
+
+      if (error || !data?.user || !data?.session?.access_token) {
+        return res.status(401).json({
+          error: 'Authentication failed',
+          message: error?.message || 'Invalid credentials.'
+        });
+      }
+
+      // Fetch client profile from database
+      const { data: clientProfile, error: cpErr } = await supabaseAdmin
+        .from('client_profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (cpErr) {
+        return res.status(500).json({ error: 'Database error verifying client profile', message: cpErr.message });
+      }
+
+      if (!clientProfile || clientProfile.status !== 'active') {
+        return res.status(403).json({
+          error: 'Client Profile Required',
+          message: 'This account does not have an active client profile.'
+        });
       }
 
       return res.json({
         success: true,
-        token: data.session?.access_token || normalizedEmail,
+        token: data.session.access_token,
         user: {
           id: data.user.id,
           email: data.user.email,
-          fullName: clientProfile?.full_name || data.user.user_metadata?.full_name || 'Client Member',
+          fullName: clientProfile.full_name || 'Client Member',
           role: 'client',
-          status: clientProfile?.status || 'active',
-          membershipTier: clientProfile?.membership_tier || 'Executive Contingency Retainer'
+          status: clientProfile.status,
+          membershipTier: clientProfile.membership_tier || 'Executive Contingency Retainer'
         }
       });
     }
@@ -387,7 +463,7 @@ clientRouter.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Local fallback for dev test fixtures
+    // Local fallback for dev test fixtures without Supabase configured
     res.json({
       success: true,
       token: normalizedEmail,

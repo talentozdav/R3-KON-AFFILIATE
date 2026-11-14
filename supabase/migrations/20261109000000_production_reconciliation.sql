@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- R3 CONTINGENCIES — PRODUCTION SCHEMA RECONCILIATION & INTEGRITY CONSTRAINTS
 -- Migration: 20261109000000_production_reconciliation.sql
--- Target Supabase Project: btyrmnklklxgqoxdhetd (https://btyrmnklklxgqoxdhetd.supabase.co)
+-- Target Supabase Project: mxzjanjdwnhonqensnsw (https://mxzjanjdwnhonqensnsw.supabase.co)
 -- ==============================================================================
 
 -- 1. Ensure all user roles are safely present in enum user_role

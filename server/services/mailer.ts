@@ -277,7 +277,7 @@ export async function sendAffiliateApprovalActivation(params: {
   referenceNumber?: string;
 }): Promise<SendEmailResult> {
   const { email, fullName, referralCode } = params;
-  const activationUrl = params.activationUrl || params.loginUrl || 'https://r3-kon.vercel.app/affiliate/portal?mode=login';
+  const activationUrl = params.activationUrl || params.loginUrl || 'https://r3-kon-affiliate.vercel.app/affiliate/portal?mode=login';
 
   const html = `
     <div style="font-family: sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">

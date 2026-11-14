@@ -120,11 +120,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
 
   // Application Filter state
   const [appStatusFilter, setAppStatusFilter] = useState<string>('ALL');
+  const [adminError, setAdminError] = useState<string | null>(null);
 
   const fetchAllData = async () => {
     setIsLoading(true);
+    setAdminError(null);
     try {
-      const [m, apps, affs, refs, convs, comms, rls, pays, logs, clients] = await Promise.all([
+      const settled = await Promise.allSettled([
         api.getAdminOverview(),
         api.getAdminApplications(),
         api.getAdminAffiliates(),
@@ -137,19 +139,48 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
         api.getAdminClientRegistrations()
       ]);
 
-      setMetrics(m.metrics);
-      setApplications(apps.applications);
-      setAffiliates(affs.affiliates);
-      setLeads(refs.leads);
-      setClicks(refs.clicks);
-      setConversions(convs.conversions);
-      setCommissions(comms.commissions);
-      setRules(rls.rules);
-      setPayouts(pays.payouts);
-      setAuditLogs(logs.auditLogs);
-      setClientRegistrations(clients.registrations || []);
+      const [m, apps, affs, refs, convs, comms, rls, pays, logs, clients] = settled;
+      const unexpectedErrors: string[] = [];
+
+      const recordError = (label: string, res: PromiseSettledResult<any>) => {
+        if (res.status === 'rejected') {
+          const msg = res.reason?.message || 'Request failed';
+          if (!msg.toLowerCase().includes('not authorized')) {
+            unexpectedErrors.push(`${label}: ${msg}`);
+          }
+        }
+      };
+
+      recordError('Overview', m);
+      recordError('Applications', apps);
+      recordError('Affiliates', affs);
+      recordError('Referrals', refs);
+      recordError('Conversions', convs);
+      recordError('Commissions', comms);
+      recordError('Commission Rules', rls);
+      recordError('Payouts', pays);
+      recordError('Audit Logs', logs);
+      recordError('Client CRM', clients);
+
+      if (m.status === 'fulfilled') setMetrics(m.value.metrics);
+      if (apps.status === 'fulfilled') setApplications(apps.value.applications || []);
+      if (affs.status === 'fulfilled') setAffiliates(affs.value.affiliates || []);
+      if (refs.status === 'fulfilled') {
+        setLeads(refs.value.leads || []);
+        setClicks(refs.value.clicks || []);
+      }
+      if (convs.status === 'fulfilled') setConversions(convs.value.conversions || []);
+      if (comms.status === 'fulfilled') setCommissions(comms.value.commissions || []);
+      if (rls.status === 'fulfilled') setRules(rls.value.rules || []);
+      if (pays.status === 'fulfilled') setPayouts(pays.value.payouts || []);
+      if (logs.status === 'fulfilled') setAuditLogs(logs.value.auditLogs || []);
+      if (clients.status === 'fulfilled') setClientRegistrations(clients.value.registrations || []);
+
+      if (unexpectedErrors.length > 0) {
+        setAdminError(unexpectedErrors.join(' | '));
+      }
     } catch (err: any) {
-      console.error('Failed to load admin data:', err);
+      setAdminError(err.message || 'Failed to synchronize administration registry data.');
     } finally {
       setIsLoading(false);
     }
@@ -350,7 +381,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
       setClientNotes(notesRes.notes || []);
       setClientFollowups(followupsRes.followups || []);
     } catch (err: any) {
-      console.error('Error fetching client CRM notes:', err);
+      setAdminError(err.message || 'Failed to load confidential CRM notes and follow-ups.');
     }
   };
 
@@ -503,6 +534,27 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
 
         {/* Tab Body */}
         <div className="p-6 lg:p-8 overflow-y-auto max-h-[calc(85vh-140px)]">
+          {adminError && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-900 text-xs flex items-start justify-between gap-4">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold uppercase tracking-wider block text-[11px] text-red-800">
+                    Registry / Database Sync Error
+                  </span>
+                  <span className="font-light text-red-800 break-words">{adminError}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setAdminError(null)}
+                className="text-red-700 hover:text-red-950 shrink-0"
+                title="Dismiss error"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {/* TAB 1: OVERVIEW */}
           {activeTab === 'overview' && metrics && (
             <div className="space-y-8">
