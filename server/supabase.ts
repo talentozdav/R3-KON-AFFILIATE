@@ -252,6 +252,9 @@ export async function signInWithSupabasePassword(
     });
     return authClient.auth.signInWithPassword({ email, password });
   }
+  if (!isProduction && process.env.NODE_ENV === 'test' && (supabaseAdmin as any)?.auth?.signInWithPassword) {
+    return (supabaseAdmin as any).auth.signInWithPassword({ email, password });
+  }
   return null;
 }
 
@@ -393,11 +396,12 @@ export async function verifySupabaseToken(token: string): Promise<AuthenticatedU
     const client = memoryClientRegistrations.find(c => c.email.toLowerCase() === token.toLowerCase());
     if (client) {
       return {
-        id: client.id,
+        id: client.userId || client.id,
         email: client.email,
         fullName: client.fullName,
         role: 'client',
         status: 'active',
+        clientId: client.userId || client.id,
         membershipTier: client.serviceCategory
       };
     }
@@ -405,7 +409,7 @@ export async function verifySupabaseToken(token: string): Promise<AuthenticatedU
     const aff = memoryDb.affiliates.find(a => a.email.toLowerCase() === token.toLowerCase());
     if (aff) {
       return {
-        id: aff.id,
+        id: aff.userId || aff.id,
         email: aff.email,
         fullName: aff.fullName,
         role: 'affiliate',
@@ -549,7 +553,7 @@ export async function getAffiliateApplicationByEmail(email: string): Promise<Aff
     const { data, error } = await supabaseAdmin
       .from('affiliate_applications')
       .select('*')
-      .eq('email', normalized)
+      .ilike('email', normalized)
       .order('submitted_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -574,7 +578,7 @@ export async function getAffiliateApplicationByRef(ref: string, email?: string):
       .eq('reference_number', cleanRef);
 
     if (email) {
-      query = query.eq('email', email.trim().toLowerCase());
+      query = query.ilike('email', email.trim().toLowerCase());
     }
 
     const { data, error } = await query.maybeSingle();
@@ -787,7 +791,8 @@ export async function getAffiliateByEmail(email: string): Promise<AffiliateRecor
     const { data, error } = await supabaseAdmin
       .from('affiliates')
       .select('*')
-      .eq('email', normalized)
+      .ilike('email', normalized)
+      .limit(1)
       .maybeSingle();
 
     if (error) throw new Error(`Database error querying affiliate by email: ${error.message}`);
@@ -813,6 +818,28 @@ export async function getAffiliateByCode(code: string): Promise<AffiliateRecord 
   assertSupabaseInProduction();
   const mem = memoryDb.affiliates.find(a => a.referralCode.toUpperCase() === clean);
   return mem ? (mem as any) : null;
+}
+
+export async function generateUniqueReferralCode(preferredBase: string): Promise<string> {
+  const sanitized = preferredBase
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '')
+    .replace(/^-+|-+$/g, '') || 'PARTNER';
+  const baseCode = sanitized.endsWith('-R3') ? sanitized : `${sanitized}-R3`;
+
+  if (!(await getAffiliateByCode(baseCode))) {
+    return baseCode;
+  }
+
+  for (let suffix = 2; suffix <= 50; suffix++) {
+    const candidate = `${baseCode}-${suffix}`;
+    if (!(await getAffiliateByCode(candidate))) {
+      return candidate;
+    }
+  }
+
+  return `${baseCode}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
 }
 
 export async function getAffiliates(): Promise<AffiliateRecord[]> {
@@ -850,7 +877,7 @@ export async function updateAffiliateStatus(id: string, status: AffiliateRecord[
   }
 }
 
-function mapAffiliateRow(r: any): AffiliateRecord {
+export function mapAffiliateRow(r: any): AffiliateRecord {
   return {
     id: r.id,
     affiliateNumber: r.affiliate_number,
@@ -946,13 +973,13 @@ export async function recordReferralClick(data: {
 
 export async function getReferralClicks(affiliateId?: string): Promise<any[]> {
   if (supabaseAdmin) {
-    let query = supabaseAdmin.from('referral_clicks').select('*').order('created_at', { ascending: false });
+    let query = supabaseAdmin.from('referral_clicks').select('*').order('timestamp', { ascending: false });
     if (affiliateId) query = query.eq('affiliate_id', affiliateId);
     const { data, error } = await query;
     if (error) {
       throw new Error(`Database error fetching referral clicks: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapReferralClickRow);
   }
   assertSupabaseInProduction();
   return memoryDb.clicks;
@@ -989,7 +1016,7 @@ export async function createReferralLead(data: {
     if (error || !inserted) {
       throw new Error(`Database error saving lead: ${error?.message || 'No record returned'}`);
     }
-    return inserted;
+    return mapLeadRow(inserted);
   }
   assertSupabaseInProduction();
 
@@ -1013,11 +1040,41 @@ export async function getReferralLeads(affiliateId?: string): Promise<any[]> {
     if (error) {
       throw new Error(`Database error fetching leads: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapLeadRow);
   }
   assertSupabaseInProduction();
   if (affiliateId) return memoryDb.leads.filter(l => l.affiliateId === affiliateId);
   return memoryDb.leads;
+}
+
+function mapReferralClickRow(r: any) {
+  return {
+    id: r.id,
+    referralCode: r.referral_code,
+    affiliateId: r.affiliate_id,
+    visitorHash: r.visitor_hash,
+    isUnique: Boolean(r.is_unique),
+    referer: r.referer || undefined,
+    userAgent: r.user_agent || undefined,
+    timestamp: r.timestamp
+  };
+}
+
+function mapLeadRow(r: any) {
+  return {
+    id: r.id,
+    affiliateId: r.affiliate_id,
+    referralCode: r.referral_code,
+    clientIdentifier: r.client_identifier,
+    clientType: r.client_type,
+    region: r.region,
+    serviceCategory: r.service_category,
+    status: r.status,
+    estimatedValue: r.estimated_value !== null && r.estimated_value !== undefined ? Number(r.estimated_value) : undefined,
+    notes: r.notes || undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  };
 }
 
 // ==============================================================================
@@ -1067,7 +1124,7 @@ export async function createConversion(data: {
         console.warn('[R3 Supabase] Lead status conversion link warning:', leadErr.message);
       }
     }
-    return inserted;
+    return mapConversionRow(inserted);
   }
 
   assertSupabaseInProduction();
@@ -1098,7 +1155,7 @@ export async function getConversions(affiliateId?: string): Promise<any[]> {
     if (error) {
       throw new Error(`Database error querying conversions: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapConversionRow);
   }
   assertSupabaseInProduction();
   if (affiliateId) return memoryDb.conversions.filter(c => c.affiliateId === affiliateId);
@@ -1126,7 +1183,7 @@ export async function verifyConversion(id: string, verificationStatus: string, v
     if (!data) {
       throw new Error('Conversion record not found.');
     }
-    return data;
+    return mapConversionRow(data);
   }
 
   assertSupabaseInProduction();
@@ -1146,7 +1203,7 @@ export async function getCommissionRules(): Promise<any[]> {
     if (error) {
       throw new Error(`Database error fetching rules: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapCommissionRuleRow);
   }
   assertSupabaseInProduction();
   return memoryDb.commissionRules;
@@ -1180,7 +1237,7 @@ export async function createCommissionRule(data: {
     if (error || !inserted) {
       throw new Error(`Database error creating rule: ${error?.message || 'Insert returned no data'}`);
     }
-    return inserted;
+    return mapCommissionRuleRow(inserted);
   }
   assertSupabaseInProduction();
   const mem = {
@@ -1208,12 +1265,45 @@ export async function toggleCommissionRuleStatus(id: string, status: 'active' | 
     if (!data) {
       throw new Error('Commission rule not found.');
     }
-    return data;
+    return mapCommissionRuleRow(data);
   }
   assertSupabaseInProduction();
   const mem = memoryDb.commissionRules.find(r => r.id === id);
   if (mem) mem.status = status;
   return mem;
+}
+
+function mapConversionRow(r: any) {
+  return {
+    id: r.id,
+    transactionReference: r.transaction_reference,
+    affiliateId: r.affiliate_id,
+    leadId: r.lead_id || undefined,
+    membershipTierOrCategory: r.membership_tier_or_category,
+    eligibleSaleAmount: Number(r.eligible_sale_amount),
+    currency: r.currency || 'USD',
+    verificationStatus: r.verification_status,
+    verificationNotes: r.verification_notes || undefined,
+    verifiedBy: r.verified_by || undefined,
+    verifiedAt: r.verified_at || undefined,
+    transactionDate: r.transaction_date,
+    createdAt: r.created_at
+  };
+}
+
+function mapCommissionRuleRow(r: any) {
+  return {
+    id: r.id,
+    name: r.name,
+    serviceCategory: r.service_category,
+    ratePercent: Number(r.rate_percent),
+    status: r.status,
+    effectiveDate: r.effective_date,
+    approvedBy: r.approved_by || undefined,
+    approvedAt: r.approved_at || undefined,
+    description: r.description || '',
+    createdAt: r.created_at
+  };
 }
 
 export async function generateCommission(data: {
@@ -1287,7 +1377,7 @@ export async function generateCommission(data: {
     if (error || !inserted) {
       throw new Error(`Database error generating commission: ${error?.message || 'Insert returned no data'}`);
     }
-    return inserted;
+    return mapCommissionRow(inserted);
   }
 
   assertSupabaseInProduction();
@@ -1317,7 +1407,7 @@ export async function getCommissions(affiliateId?: string): Promise<any[]> {
     if (error) {
       throw new Error(`Database error fetching commissions: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapCommissionRow);
   }
   assertSupabaseInProduction();
   if (affiliateId) return memoryDb.commissions.filter(c => c.affiliateId === affiliateId);
@@ -1347,7 +1437,7 @@ export async function actionCommission(id: string, action: 'approve' | 'reverse'
     if (!data) {
       throw new Error('Commission record not found.');
     }
-    return data;
+    return mapCommissionRow(data);
   }
 
   assertSupabaseInProduction();
@@ -1412,7 +1502,7 @@ export async function preparePayoutBatch(data: {
       throw new Error(`Database error linking commissions to payout batch: ${linkErr.message}`);
     }
 
-    return payout;
+    return mapPayoutRow(payout);
   }
 
   assertSupabaseInProduction();
@@ -1443,7 +1533,7 @@ export async function getPayouts(affiliateId?: string): Promise<any[]> {
     if (error) {
       throw new Error(`Database error fetching payouts: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapPayoutRow);
   }
   assertSupabaseInProduction();
   if (affiliateId) return memoryDb.payouts.filter(p => p.affiliateId === affiliateId);
@@ -1477,7 +1567,7 @@ export async function recordPayoutPayment(id: string, paymentReference: string, 
     if (commErr) {
       throw new Error(`Database error updating commissions for settled payout: ${commErr.message}`);
     }
-    return data;
+    return mapPayoutRow(data);
   }
 
   assertSupabaseInProduction();
@@ -1539,10 +1629,63 @@ export async function getAuditLogs(): Promise<any[]> {
     if (error) {
       throw new Error(`Database error fetching audit logs: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapAuditLogRow);
   }
   assertSupabaseInProduction();
   return memoryDb.auditLogs;
+}
+
+function mapCommissionRow(r: any) {
+  return {
+    id: r.id,
+    commissionReference: r.commission_reference,
+    affiliateId: r.affiliate_id,
+    conversionId: r.conversion_id,
+    transactionReference: r.transaction_reference,
+    eligibleTransactionAmount: Number(r.eligible_transaction_amount),
+    appliedCommissionRate: Number(r.applied_commission_rate),
+    commissionAmount: Number(r.commission_amount),
+    currency: r.currency || 'USD',
+    status: r.status,
+    payoutId: r.payout_id || undefined,
+    auditReason: r.audit_reason || undefined,
+    approvedBy: r.approved_by || undefined,
+    approvedAt: r.approved_at || undefined,
+    dateRecorded: r.date_recorded
+  };
+}
+
+function mapPayoutRow(r: any) {
+  return {
+    id: r.id,
+    payoutReference: r.payout_reference,
+    affiliateId: r.affiliate_id,
+    payoutPeriod: r.payout_period,
+    amount: Number(r.amount),
+    currency: r.currency || 'USD',
+    status: r.status,
+    paymentMethod: r.payment_method,
+    paymentReference: r.payment_reference || undefined,
+    notes: r.notes || undefined,
+    preparedBy: r.prepared_by,
+    processedBy: r.processed_by || undefined,
+    processedAt: r.processed_at || undefined,
+    createdAt: r.created_at
+  };
+}
+
+function mapAuditLogRow(r: any) {
+  return {
+    id: r.id,
+    action: r.action,
+    actorEmail: r.actor_email,
+    actorRole: r.actor_role,
+    targetType: r.target_type,
+    targetId: r.target_id,
+    details: r.details,
+    ipAddress: r.ip_address || undefined,
+    timestamp: r.timestamp
+  };
 }
 
 // ==============================================================================
@@ -1939,24 +2082,49 @@ export async function insertClientInquiry(data: {
   return { id: record.id, referenceNumber: ref };
 }
 
-export async function getClientInquiries(clientId?: string): Promise<any[]> {
+export async function getClientInquiries(clientId?: string, registrationId?: string): Promise<any[]> {
   if (supabaseAdmin) {
     let query = supabaseAdmin.from('client_inquiries').select('*').order('created_at', { ascending: false });
     if (clientId) {
       query = query.eq('client_id', clientId);
     }
+    if (registrationId) {
+      query = query.eq('registration_id', registrationId);
+    }
     const { data, error } = await query;
     if (error) {
       throw new Error(`Database error fetching inquiries: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapClientInquiryRow);
   }
 
   assertSupabaseInProduction();
-  if (clientId) {
-    return memoryClientInquiries.filter(i => i.clientId === clientId);
-  }
-  return memoryClientInquiries;
+  return memoryClientInquiries.filter(i => {
+    if (clientId && i.clientId !== clientId) return false;
+    if (registrationId && i.registrationId !== registrationId) return false;
+    return true;
+  });
+}
+
+function mapClientInquiryRow(r: any) {
+  return {
+    id: r.id,
+    referenceNumber: r.reference_number,
+    clientId: r.client_id || undefined,
+    registrationId: r.registration_id || undefined,
+    clientName: r.client_name,
+    email: r.email,
+    phone: r.phone || undefined,
+    organization: r.organization || undefined,
+    country: r.country || 'United States',
+    serviceInterest: r.service_interest,
+    briefSummary: r.brief_summary || undefined,
+    status: r.status,
+    priority: r.priority,
+    assignedCoordinator: r.assigned_coordinator || undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  };
 }
 
 export async function backfillClientInquiryClientId(registrationId: string, clientId: string): Promise<void> {
@@ -2007,7 +2175,7 @@ export async function insertClientNote(data: {
     if (error || !inserted) {
       throw new Error(`Database error inserting note: ${error?.message || 'Insert returned no data'}`);
     }
-    return inserted;
+    return mapClientNoteRow(inserted);
   }
 
   assertSupabaseInProduction();
@@ -2027,11 +2195,25 @@ export async function getClientNotes(registrationId: string): Promise<any[]> {
     if (error) {
       throw new Error(`Database error fetching notes: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapClientNoteRow);
   }
 
   assertSupabaseInProduction();
   return memoryClientNotes.filter(n => n.registrationId === registrationId);
+}
+
+function mapClientNoteRow(r: any) {
+  return {
+    id: r.id,
+    registrationId: r.registration_id,
+    clientId: r.client_id || undefined,
+    authorEmail: r.author_email,
+    authorName: r.author_name,
+    noteType: r.note_type,
+    content: r.content,
+    isConfidential: r.is_confidential,
+    createdAt: r.created_at
+  };
 }
 
 export async function insertClientFollowup(data: {
@@ -2062,7 +2244,7 @@ export async function insertClientFollowup(data: {
     if (error || !inserted) {
       throw new Error(`Database error inserting followup: ${error?.message || 'Insert returned no data'}`);
     }
-    return inserted;
+    return mapClientFollowupRow(inserted);
   }
 
   assertSupabaseInProduction();
@@ -2081,7 +2263,7 @@ export async function getClientFollowups(registrationId?: string): Promise<any[]
     if (error) {
       throw new Error(`Database error fetching followups: ${error.message}`);
     }
-    return data || [];
+    return (data || []).map(mapClientFollowupRow);
   }
 
   assertSupabaseInProduction();
@@ -2089,6 +2271,22 @@ export async function getClientFollowups(registrationId?: string): Promise<any[]
     return memoryClientFollowups.filter(f => f.registrationId === registrationId);
   }
   return memoryClientFollowups;
+}
+
+function mapClientFollowupRow(r: any) {
+  return {
+    id: r.id,
+    registrationId: r.registration_id,
+    clientId: r.client_id || undefined,
+    title: r.title,
+    dueDate: r.due_date,
+    priority: r.priority,
+    status: r.status,
+    assignedTo: r.assigned_to,
+    notes: r.notes || undefined,
+    createdAt: r.created_at,
+    completedAt: r.completed_at || undefined
+  };
 }
 
 // ==============================================================================

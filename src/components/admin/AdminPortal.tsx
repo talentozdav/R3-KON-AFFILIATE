@@ -14,6 +14,7 @@ import {
   ApplicationStatus,
   AffiliateStatus,
   ClientRegistration,
+  ClientInquiry,
   ClientNote,
   ClientFollowup
 } from '../../types';
@@ -74,6 +75,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
 
   // Client CRM Modal & Action States
   const [selectedClientForNotes, setSelectedClientForNotes] = useState<ClientRegistration | null>(null);
+  const [clientDossierInquiries, setClientDossierInquiries] = useState<ClientInquiry[]>([]);
   const [clientNotes, setClientNotes] = useState<ClientNote[]>([]);
   const [clientFollowups, setClientFollowups] = useState<ClientFollowup[]>([]);
   const [newNoteContent, setNewNoteContent] = useState('');
@@ -373,15 +375,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   // 12. Client CRM Handlers
   const handleOpenClientNotes = async (client: ClientRegistration) => {
     setSelectedClientForNotes(client);
+    setClientDossierInquiries([]);
     try {
-      const [notesRes, followupsRes] = await Promise.all([
+      const [notesRes, followupsRes, inquiriesRes] = await Promise.all([
         api.getAdminClientNotes(client.id),
-        api.getAdminClientFollowups(client.id)
+        api.getAdminClientFollowups(client.id),
+        api.getAdminClientInquiries(client.id)
       ]);
       setClientNotes(notesRes.notes || []);
       setClientFollowups(followupsRes.followups || []);
+      setClientDossierInquiries(inquiriesRes.inquiries || []);
     } catch (err: any) {
-      setAdminError(err.message || 'Failed to load confidential CRM notes and follow-ups.');
+      setAdminError(err.message || 'Failed to load confidential CRM notes, inquiries, and follow-ups.');
     }
   };
 
@@ -838,6 +843,79 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Attributed & Direct Referral Leads Registry */}
+              <div className="pt-2 space-y-3">
+                <div>
+                  <h4 className="font-serif text-lg text-[#0A192F] font-normal">
+                    Attributed &amp; Direct Referral Leads ({leads.length})
+                  </h4>
+                  <p className="text-xs text-stone-600 font-light">
+                    Client leads registered directly by accredited affiliates or attributed via public referral links ({clicks.length} total link clicks).
+                  </p>
+                </div>
+
+                <div className="bg-white border border-[#E2DDD3] overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-stone-50 border-b border-[#E2DDD3] text-[10px] uppercase font-medium text-stone-600 tracking-wider">
+                      <tr>
+                        <th className="py-3 px-4">Client Identifier</th>
+                        <th className="py-3 px-4">Type &amp; Region</th>
+                        <th className="py-3 px-4">Referral Code / Partner</th>
+                        <th className="py-3 px-4">Service Category</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4 text-right">Est. Value</th>
+                        <th className="py-3 px-4">Logged Date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {leads.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-6 text-center text-stone-500 font-light">
+                            No referral leads recorded yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        leads.map((lead) => {
+                          const aff = affiliates.find((a) => a.id === lead.affiliateId);
+                          return (
+                            <tr key={lead.id} className="hover:bg-stone-50/60 transition-colors">
+                              <td className="py-3 px-4 font-medium text-[#0A192F]">
+                                {lead.clientIdentifier}
+                              </td>
+                              <td className="py-3 px-4 text-stone-700">
+                                {lead.clientType} · {lead.region}
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className="font-mono text-[#D4AF37] font-medium block">
+                                  {lead.referralCode}
+                                </span>
+                                {aff && (
+                                  <span className="text-[11px] text-stone-500 font-light">
+                                    {aff.businessName || aff.fullName}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 text-stone-700">{lead.serviceCategory}</td>
+                              <td className="py-3 px-4">
+                                <span className="font-mono text-[10px] uppercase px-2 py-0.5 border border-stone-300 bg-stone-50 text-stone-700">
+                                  {lead.status.replace('_', ' ')}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 text-right font-mono tabular-nums text-[#0A192F]">
+                                {lead.estimatedValue ? `$${Number(lead.estimatedValue).toLocaleString()}` : '—'}
+                              </td>
+                              <td className="py-3 px-4 font-mono text-stone-500 text-[11px]">
+                                {new Date(lead.createdAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -2043,9 +2121,42 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
             <h3 className="font-serif text-2xl text-[#0A192F] font-normal mb-1">
               Client CRM Dossier: {selectedClientForNotes.fullName}
             </h3>
-            <p className="text-xs text-stone-600 mb-6 font-light">
+            <p className="text-xs text-stone-600 mb-5 font-light">
               Ref: <span className="font-mono text-[#0A192F]">{selectedClientForNotes.referenceNumber}</span> · {selectedClientForNotes.email} · {selectedClientForNotes.country || 'United States'}
             </p>
+
+            {/* Linked Client Inquiries / Operational Briefs */}
+            <div className="mb-6 space-y-2.5">
+              <h4 className="text-xs uppercase tracking-wider font-semibold text-[#0A192F] flex items-center gap-1.5 border-b border-stone-200 pb-2">
+                <FileCheck2 className="w-3.5 h-3.5 text-[#D4AF37]" />
+                <span>Linked Advisory Briefs &amp; Inquiries ({clientDossierInquiries.length})</span>
+              </h4>
+              {clientDossierInquiries.length === 0 ? (
+                <div className="text-xs text-stone-500 font-light p-3 bg-stone-50 border border-stone-200">
+                  No linked inquiry records found in client_inquiries.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                  {clientDossierInquiries.map((inq) => (
+                    <div key={inq.id} className="p-3 bg-white border border-stone-200 text-xs space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-semibold text-[#0A192F]">{inq.referenceNumber}</span>
+                        <div className="flex items-center gap-2 font-mono text-[10px] uppercase">
+                          <span className="px-1.5 py-0.5 bg-stone-100 border border-stone-300 text-stone-700">
+                            {inq.priority}
+                          </span>
+                          <span className="px-1.5 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800">
+                            {inq.status.replace('_', ' ')}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-[11px] font-medium text-stone-700">{inq.serviceInterest}</div>
+                      {inq.briefSummary && <p className="text-stone-600 font-light">{inq.briefSummary}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Left Column: Staff CRM Notes */}

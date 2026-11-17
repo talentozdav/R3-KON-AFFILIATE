@@ -69,19 +69,31 @@ affiliatesRouter.post('/submit-lead', async (req: AuthenticatedRequest, res: Res
       return res.status(400).json({ error: 'Client organization or descriptive identifier is required.' });
     }
 
-    if (!serviceCategory) {
+    if (!serviceCategory || typeof serviceCategory !== 'string' || serviceCategory.trim().length < 2) {
       return res.status(400).json({ error: 'Service category is required.' });
+    }
+
+    const allowedClientTypes = ['Individual', 'Corporate', 'Institutional'] as const;
+    const resolvedClientType = allowedClientTypes.includes(clientType) ? clientType : 'Corporate';
+
+    let parsedEstimatedValue: number | undefined;
+    if (estimatedValue !== undefined && estimatedValue !== null && estimatedValue !== '') {
+      const n = Number(estimatedValue);
+      if (!Number.isFinite(n) || n <= 0) {
+        return res.status(400).json({ error: 'Estimated value must be a positive number.' });
+      }
+      parsedEstimatedValue = n;
     }
 
     const newLead = await createReferralLead({
       affiliateId: affiliate.id,
       referralCode: affiliate.referralCode,
       clientIdentifier: clientIdentifier.trim(),
-      clientType: clientType || 'Corporate',
-      region: region || 'United States',
-      serviceCategory,
-      estimatedValue: estimatedValue ? Number(estimatedValue) : undefined,
-      notes: notes?.trim()
+      clientType: resolvedClientType,
+      region: typeof region === 'string' && region.trim() ? region.trim() : 'United States',
+      serviceCategory: serviceCategory.trim(),
+      estimatedValue: parsedEstimatedValue,
+      notes: typeof notes === 'string' && notes.trim() ? notes.trim() : undefined
     });
 
     await recordAuditLog(

@@ -102,15 +102,36 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
     briefSummary
   } = req.body;
 
-  if (!clientName || !email || !serviceInterest) {
-    return res.status(400).json({ error: 'Name, email, and service interest are required.' });
+  const validationErrors: Record<string, string> = {};
+  if (!clientName || typeof clientName !== 'string' || clientName.trim().length < 2) {
+    validationErrors.clientName = 'Client or principal name is required (minimum 2 characters).';
   }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!email || typeof email !== 'string' || !emailRegex.test(email.trim())) {
+    validationErrors.email = 'Valid business or personal email is required.';
+  }
+  if (!serviceInterest || typeof serviceInterest !== 'string' || serviceInterest.trim().length < 2) {
+    validationErrors.serviceInterest = 'Service interest category is required.';
+  }
+
+  if (Object.keys(validationErrors).length > 0) {
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: validationErrors,
+      message: 'Name, valid email, and service interest are required.'
+    });
+  }
+
+  const normalizedCountry =
+    typeof country === 'string' && country.trim() ? country.trim() : 'United States';
+  const normalizedOrganization =
+    typeof organization === 'string' && organization.trim() ? organization.trim() : undefined;
 
   let affiliateId = '';
   let cleanCode = '';
 
   try {
-    if (referralCode) {
+    if (referralCode && typeof referralCode === 'string' && referralCode.trim()) {
       const affiliate = await getAffiliateByCode(referralCode.trim().toUpperCase());
       if (affiliate && affiliate.status === 'active') {
         affiliateId = affiliate.id;
@@ -120,18 +141,18 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
 
     // 1. If valid affiliate attribution exists, create lead record for affiliate
     if (affiliateId) {
-      const maskedClient = organization
-        ? `${organization} (${country || 'United States'})`
-        : `Private Principal (${country || 'United States'})`;
+      const maskedClient = normalizedOrganization
+        ? `${normalizedOrganization} (${normalizedCountry})`
+        : `Private Principal (${normalizedCountry})`;
 
       const leadRecord = await createReferralLead({
         affiliateId,
         referralCode: cleanCode,
         clientIdentifier: maskedClient,
-        clientType: organization ? 'Corporate' : 'Individual',
-        region: country || 'United States',
-        serviceCategory: serviceInterest,
-        notes: `Inquiry submitted via partner link [${cleanCode}]. Brief: ${briefSummary || 'Confidential introduction.'}`
+        clientType: normalizedOrganization ? 'Corporate' : 'Individual',
+        region: normalizedCountry,
+        serviceCategory: serviceInterest.trim(),
+        notes: `Inquiry submitted via partner link [${cleanCode}]. Brief: ${briefSummary ? String(briefSummary).trim() : 'Confidential introduction.'}`
       });
 
       await recordAuditLog(
@@ -153,11 +174,11 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
       registration = await insertClientRegistration({
         fullName: clientName.trim(),
         email: normalizedEmail,
-        phone: phone ? phone.trim() : undefined,
-        company: organization ? organization.trim() : undefined,
-        country: country ? country.trim() : 'United States',
-        serviceCategory: serviceInterest,
-        requirementsBrief: briefSummary ? briefSummary.trim() : undefined,
+        phone: phone ? String(phone).trim() : undefined,
+        company: normalizedOrganization,
+        country: normalizedCountry,
+        serviceCategory: serviceInterest.trim(),
+        requirementsBrief: briefSummary ? String(briefSummary).trim() : undefined,
         referralCode: cleanCode || undefined
       });
     }
@@ -167,11 +188,11 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
       clientId: registration.userId,
       clientName: clientName.trim(),
       email: normalizedEmail,
-      phone: phone ? phone.trim() : undefined,
-      organization: organization ? organization.trim() : undefined,
-      country: country ? country.trim() : 'United States',
-      serviceInterest,
-      briefSummary: briefSummary ? briefSummary.trim() : undefined
+      phone: phone ? String(phone).trim() : undefined,
+      organization: normalizedOrganization,
+      country: normalizedCountry,
+      serviceInterest: serviceInterest.trim(),
+      briefSummary: briefSummary ? String(briefSummary).trim() : undefined
     });
 
     res.status(201).json({

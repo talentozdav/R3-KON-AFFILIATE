@@ -6,6 +6,7 @@ import {
   getClientRegistrations,
   updateClientRegistrationStatus,
   updateClientRegistrationInvitation,
+  getClientInquiries,
   getClientNotes,
   insertClientNote,
   getClientFollowups,
@@ -15,6 +16,9 @@ import {
   reviewAffiliateApplication,
   createAffiliate,
   getAffiliates,
+  getAffiliateByEmail,
+  getAffiliateByCode,
+  generateUniqueReferralCode,
   updateAffiliateStatus,
   getReferralLeads,
   getReferralClicks,
@@ -284,6 +288,17 @@ adminRouter.get('/client-registrations', requireRoles('super_admin', 'affiliate_
   }
 });
 
+// Client CRM Inquiries (linked by optional registrationId)
+adminRouter.get('/client-inquiries', requireRoles('super_admin', 'affiliate_manager'), async (req: AuthenticatedRequest, res: Response) => {
+  const registrationId = typeof req.query.registrationId === 'string' ? req.query.registrationId : undefined;
+  try {
+    const inquiries = await getClientInquiries(undefined, registrationId);
+    res.json({ inquiries });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch client inquiries', message: err.message });
+  }
+});
+
 // Update client registration status
 adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin', 'affiliate_manager'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
@@ -500,9 +515,8 @@ adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affi
       return res.status(400).json({ error: `Application must be in APPROVED status prior to activation. Current status: ${app.status}` });
     }
 
-    const affiliates = await getAffiliates();
-    const existingAffiliate = affiliates.find(a => a.email.toLowerCase() === app.email.toLowerCase());
-    if (existingAffiliate) {
+    const existingAffiliate = await getAffiliateByEmail(app.email);
+    if (existingAffiliate || app.activatedAffiliateId) {
       return res.status(400).json({ error: 'An active affiliate profile already exists for this candidate.' });
     }
 
@@ -511,7 +525,20 @@ adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affi
       return res.status(400).json({ error: 'Approved rate percent must be a valid number between 0 and 100.' });
     }
 
-    const referralCode = customCode ? customCode.trim().toUpperCase() : `${app.fullName.split(' ').pop()?.toUpperCase() || 'PARTNER'}-R3`;
+    let referralCode = '';
+    if (customCode && typeof customCode === 'string' && customCode.trim()) {
+      const candidateCode = customCode.trim().toUpperCase();
+      if (await getAffiliateByCode(candidateCode)) {
+        return res.status(409).json({
+          error: 'Referral Code In Use',
+          message: `Referral code '${candidateCode}' is already assigned to another partner.`
+        });
+      }
+      referralCode = candidateCode;
+    } else {
+      referralCode = await generateUniqueReferralCode(app.fullName.split(' ').pop() || 'PARTNER');
+    }
+
     let userId = `usr_${Date.now()}`;
 
     // If Supabase Auth is enabled, create or retrieve user in Supabase
@@ -522,6 +549,25 @@ adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affi
       }
       const existingAuth = listData?.users?.find(u => u.email?.toLowerCase() === app.email.toLowerCase());
       if (existingAuth) {
+        const [{ data: existingProfile }, { data: existingClientProfile }] = await Promise.all([
+          supabaseAdmin.from('profiles').select('role').eq('id', existingAuth.id).maybeSingle(),
+          supabaseAdmin.from('client_profiles').select('id').eq('id', existingAuth.id).maybeSingle()
+        ]);
+
+        const protectedRoles = ['super_admin', 'affiliate_manager', 'finance_manager', 'compliance_officer'];
+        if (existingProfile && protectedRoles.includes(existingProfile.role)) {
+          return res.status(409).json({
+            error: 'Account Conflict',
+            message: 'Cannot assign affiliate role to a privileged administrative account.'
+          });
+        }
+        if (existingClientProfile) {
+          return res.status(409).json({
+            error: 'Account Conflict',
+            message: 'This email belongs to an active Client Portal profile.'
+          });
+        }
+
         userId = existingAuth.id;
         const { error: updAuthErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
           user_metadata: { role: 'affiliate', full_name: app.fullName }
@@ -574,6 +620,8 @@ adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affi
       if (appUpdErr) {
         throw new Error(`Database error linking activated affiliate to application: ${appUpdErr.message}`);
       }
+    } else {
+      app.activatedAffiliateId = newAffiliate.id;
     }
 
     // Dispatch welcome / activation notification (non-blocking if mailer unavailable)

@@ -5,11 +5,15 @@ import {
   isProduction,
   getAffiliateById,
   getAffiliateByUserId,
+  getAffiliateByEmail,
   getAffiliateApplicationByRef,
   createAffiliate,
+  generateUniqueReferralCode,
+  mapAffiliateRow,
   recordAuditLog,
   resolveAppOrigin
 } from '../supabase.js';
+import { db as memoryDb, hashPassword, verifyPassword } from '../db.js';
 import { AuthenticatedRequest } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../services/mailer.js';
 
@@ -113,7 +117,7 @@ authRouter.post('/login', async (req: AuthenticatedRequest, res: Response) => {
           role = p.role;
           if (role === 'affiliate') {
             const { data: aff } = await supabaseAdmin.from('affiliates').select('*').eq('user_id', data.user.id).maybeSingle();
-            affiliateData = aff;
+            affiliateData = aff ? mapAffiliateRow(aff) : null;
           }
         } else {
           const { data: cp, error: cpErr } = await supabaseAdmin
@@ -182,6 +186,32 @@ authRouter.post('/login', async (req: AuthenticatedRequest, res: Response) => {
   }
 
   // Non-production test fallback when Supabase is not configured
+  const memUser = memoryDb.users.find(u => u.email.toLowerCase() === normalizedEmail);
+  if (memUser && memUser.status === 'active') {
+    if (memUser.passwordHash && memUser.passwordSalt) {
+      const ok = verifyPassword(password, memUser.passwordHash, memUser.passwordSalt);
+      if (!ok) {
+        return res.status(401).json({
+          error: 'Invalid credentials',
+          message: 'The email or password provided is incorrect.'
+        });
+      }
+    }
+    const aff = memUser.role === 'affiliate' ? memoryDb.affiliates.find(a => a.email.toLowerCase() === normalizedEmail) : null;
+    return res.json({
+      success: true,
+      token: memUser.email,
+      user: {
+        id: memUser.id,
+        email: memUser.email,
+        fullName: memUser.fullName,
+        role: memUser.role,
+        status: memUser.status,
+        affiliate: aff || undefined
+      }
+    });
+  }
+
   res.status(401).json({
     error: 'Invalid credentials',
     message: 'The email or password provided is incorrect.'
@@ -220,7 +250,7 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
       });
     }
 
-    if (application.activatedAffiliateId) {
+    if (application.activatedAffiliateId || (await getAffiliateByEmail(normalizedEmail))) {
       return res.status(409).json({
         error: 'Application already activated',
         message: 'This approved application has already been activated. Please sign in or use password recovery.'
@@ -230,7 +260,7 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
     let token = '';
 
     if (supabaseAdmin) {
-      // 1. Create or retrieve user in Supabase Auth (preventing staff takeover)
+      // 1. Create or retrieve user in Supabase Auth (preventing staff, client, or existing confirmed user takeover)
       const { data: authUser, error: authErr } = await supabaseAdmin.auth.admin.createUser({
         email: normalizedEmail,
         password,
@@ -261,6 +291,26 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
             return res.status(403).json({
               error: 'Account Conflict',
               message: 'Cannot activate an affiliate account over a privileged governance email address.'
+            });
+          }
+
+          const { data: existingClientProfile } = await supabaseAdmin
+            .from('client_profiles')
+            .select('id')
+            .eq('id', existing.id)
+            .maybeSingle();
+
+          if (existingClientProfile) {
+            return res.status(409).json({
+              error: 'Account Conflict',
+              message: 'This email is registered as a Client Portal account and cannot be overwritten by affiliate activation.'
+            });
+          }
+
+          if (existing.last_sign_in_at || existing.email_confirmed_at) {
+            return res.status(409).json({
+              error: 'Account Conflict',
+              message: 'An authenticated account already exists for this email address. Please sign in or contact governance.'
             });
           }
 
@@ -296,10 +346,10 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
         throw new Error(`Database error saving partner profile: ${profileErr.message}`);
       }
 
-      // 3. Create or find affiliate partner record
+      // 3. Create or find affiliate partner record with collision-free referral code
       let affiliate = await getAffiliateByUserId(userId);
       if (!affiliate) {
-        const refCode = `${application.fullName.split(' ').pop()?.toUpperCase() || 'PARTNER'}-R3`;
+        const refCode = await generateUniqueReferralCode(application.fullName.split(' ').pop() || 'PARTNER');
         affiliate = await createAffiliate({
           userId,
           fullName: application.fullName,
@@ -364,9 +414,55 @@ authRouter.post('/activate', async (req: AuthenticatedRequest, res: Response) =>
       throw new Error('Supabase admin client unavailable in production.');
     }
 
+    // Non-production local dev/test fallback: create affiliate + user credentials cleanly
+    const devUserId = `usr_aff_${Date.now()}`;
+    const refCode = await generateUniqueReferralCode(application.fullName.split(' ').pop() || 'PARTNER');
+    const affiliate = await createAffiliate({
+      userId: devUserId,
+      fullName: application.fullName,
+      email: normalizedEmail,
+      businessName: application.businessName,
+      referralCode: refCode,
+      approvedRatePercent: 10.0
+    });
+    const { hash, salt } = hashPassword(password);
+    memoryDb.users.push({
+      id: devUserId,
+      email: normalizedEmail,
+      fullName: application.fullName,
+      role: 'affiliate',
+      status: 'active',
+      affiliateId: affiliate.id,
+      passwordHash: hash,
+      passwordSalt: salt,
+      createdAt: new Date().toISOString()
+    });
+    application.activatedAffiliateId = affiliate.id;
+
+    await recordAuditLog(
+      normalizedEmail,
+      'affiliate',
+      'AFFILIATE_ACTIVATED',
+      'affiliates',
+      affiliate.id,
+      `Partner account activated in dev mode for ${application.referenceNumber} (${affiliate.referralCode})`,
+      req.ip
+    );
+
     res.json({
       success: true,
-      message: 'Account activated successfully (development test mode).'
+      message: 'Affiliate partnership account successfully activated (development test mode).',
+      token: normalizedEmail,
+      affiliateNumber: affiliate.affiliateNumber,
+      referralCode: affiliate.referralCode,
+      user: {
+        id: devUserId,
+        email: normalizedEmail,
+        fullName: application.fullName,
+        role: 'affiliate',
+        status: 'active',
+        affiliate
+      }
     });
   } catch (err: any) {
     console.error('[R3 Affiliate Activation Error]:', err);

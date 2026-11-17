@@ -555,7 +555,11 @@ async function runSuite() {
         from: () => ({
           select: () => ({
             ilike: () => ({
-              order: async () => ({ data: [], error: null })
+              order: () => ({
+                limit: () => ({
+                  maybeSingle: async () => ({ data: null, error: null })
+                })
+              })
             }),
             eq: () => ({
               order: () => ({
@@ -931,6 +935,587 @@ async function runSuite() {
         }
       } finally {
         if (prevAppUrl !== undefined) process.env.APP_URL = prevAppUrl;
+      }
+    });
+
+    // 33. Business / Corporate Affiliate Application (Supabase insert + validation + non-auto-approval + admin visibility)
+    await runTest('33. Business/Corporate affiliate application validates businessName, inserts into affiliate_applications (SUBMITTED), and renders in Admin queue', async () => {
+      const insertedApps: any[] = [];
+      const mockAppSupabase: any = {
+        from: (table: string) => {
+          if (table === 'affiliate_applications') {
+            return {
+              select: () => ({
+                ilike: () => ({
+                  order: () => ({
+                    limit: () => ({
+                      maybeSingle: async () => ({ data: null, error: null })
+                    })
+                  })
+                }),
+                order: async () => ({ data: insertedApps, error: null })
+              }),
+              insert: (row: any) => ({
+                select: () => ({
+                  single: async () => {
+                    const created = {
+                      ...row,
+                      id: 'app-corp-mock-1',
+                      submitted_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString()
+                    };
+                    insertedApps.push(created);
+                    return { data: created, error: null };
+                  }
+                })
+              })
+            };
+          }
+          if (table === 'audit_logs') {
+            return { insert: async () => ({ error: null }) };
+          }
+          return {
+            select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+            insert: async () => ({ error: null })
+          };
+        }
+      };
+
+      setSupabaseAdminForTesting(mockAppSupabase);
+      try {
+        // Missing businessName for Business applicant must return 400
+        const invalidRes = await makeRequest(
+          serverUrl,
+          'POST',
+          '/api/applications',
+          {
+            fullName: 'Jonathan Vance',
+            applicantType: 'Business',
+            email: `corp.missing.${Date.now()}@fiduciary.us`,
+            phone: '+1 (312) 555-0190',
+            country: 'United States (Illinois)',
+            partnershipCategory: 'corporate_counsel',
+            industryBackground: 'U.S. corporate M&A counsel and institutional risk practice spanning Chicago and Delaware.',
+            audienceDescription: 'Mid-market private equity sponsors and family office general counsels.',
+            partnershipObjectives: 'Establish formal corporate introducer arrangement for contingency engagements.',
+            termsAccepted: true,
+            privacyAccepted: true
+          },
+          { 'X-Forwarded-For': '10.10.0.33' }
+        );
+        if (invalidRes.status !== 400 || !invalidRes.body.details?.businessName) {
+          throw new Error(`Expected 400 with details.businessName, got ${invalidRes.status}: ${JSON.stringify(invalidRes.body)}`);
+        }
+
+        const validRes = await makeRequest(
+          serverUrl,
+          'POST',
+          '/api/applications',
+          {
+            fullName: 'Jonathan Vance',
+            applicantType: 'Business',
+            businessName: 'Vance Fiduciary Advisors LLC',
+            email: `corp.aff.${Date.now()}@fiduciary.us`,
+            phone: '+1 (312) 555-0191',
+            country: 'United States (Illinois)',
+            partnershipCategory: 'corporate_counsel',
+            industryBackground: 'U.S. corporate M&A counsel and institutional risk practice spanning Chicago and Delaware.',
+            audienceDescription: 'Mid-market private equity sponsors and family office general counsels.',
+            partnershipObjectives: 'Establish formal corporate introducer arrangement for contingency engagements.',
+            termsAccepted: true,
+            privacyAccepted: true
+          },
+          { 'X-Forwarded-For': '10.10.0.34' }
+        );
+        if (validRes.status !== 201) {
+          throw new Error(`Expected 201 for Business application, got ${validRes.status}: ${JSON.stringify(validRes.body)}`);
+        }
+        if (validRes.body.status !== 'SUBMITTED') {
+          throw new Error(`Application must NOT be auto-approved; expected SUBMITTED, got ${validRes.body.status}`);
+        }
+        if (insertedApps.length !== 1 || insertedApps[0].applicant_type !== 'Business' || insertedApps[0].business_name !== 'Vance Fiduciary Advisors LLC') {
+          throw new Error(`Inserted row missing corporate fields: ${JSON.stringify(insertedApps)}`);
+        }
+
+        const adminAppsRes = await makeRequest(serverUrl, 'GET', '/api/admin/applications', null, adminAuthHeader);
+        if (adminAppsRes.status !== 200 || !adminAppsRes.body.applications?.some((a: any) => a.businessName === 'Vance Fiduciary Advisors LLC')) {
+          throw new Error('Corporate affiliate application not visible in GET /api/admin/applications');
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+    });
+
+    // 34. Affiliate Self-Activation (Collision-free code generation, client_profiles protection, profiles + affiliates linkage)
+    await runTest('34. Affiliate self-activation (/api/auth/activate) generates unique referral code, blocks client takeover, and provisions Supabase records', async () => {
+      const appRef = 'R3-APP-2026-7741';
+      const affEmail = `parker.activate.${Date.now()}@partner-advisory.us`;
+      const insertedAffiliates: any[] = [];
+      let linkedAppAffId: string | null = null;
+      let upsertedProfile: any = null;
+
+      const buildQueryMock = (table: string) => ({
+        select: () => ({
+          eq: (col: string, val: any) => ({
+            ilike: () => ({
+              maybeSingle: async () => ({
+                data: table === 'affiliate_applications' && val === appRef ? {
+                  id: 'app-act-1',
+                  reference_number: appRef,
+                  full_name: 'Parker Sterling',
+                  applicant_type: 'Individual',
+                  email: affEmail,
+                  phone: '+1 (212) 555-0100',
+                  country: 'United States',
+                  partnership_category: 'wealth_advisory',
+                  industry_background: 'US Advisory',
+                  audience_description: 'US Family Offices',
+                  partnership_objectives: 'Referrals',
+                  terms_accepted: true,
+                  privacy_accepted: true,
+                  status: 'APPROVED',
+                  submitted_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                } : null,
+                error: null
+              })
+            }),
+            maybeSingle: async () => {
+              if (table === 'affiliates' && col === 'referral_code') {
+                // Force STERLING-R3 collision so backend must emit STERLING-R3-2
+                if (String(val).toUpperCase() === 'STERLING-R3') {
+                  return { data: { id: 'existing-aff', referral_code: 'STERLING-R3' }, error: null };
+                }
+                return { data: null, error: null };
+              }
+              return { data: null, error: null };
+            }
+          }),
+          ilike: () => ({
+            limit: () => ({
+              maybeSingle: async () => ({ data: null, error: null })
+            }),
+            maybeSingle: async () => ({ data: null, error: null })
+          })
+        }),
+        upsert: async (row: any) => {
+          if (table === 'profiles') upsertedProfile = row;
+          return { error: null };
+        },
+        insert: (row: any) => {
+          if (table === 'affiliates') {
+            const created = {
+              ...row,
+              id: 'aff-new-7741',
+              joined_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            insertedAffiliates.push(created);
+            return {
+              select: () => ({
+                single: async () => ({ data: created, error: null })
+              })
+            };
+          }
+          return { error: null };
+        },
+        update: (row: any) => ({
+          eq: async () => {
+            if (table === 'affiliate_applications' && row.activated_affiliate_id) {
+              linkedAppAffId = row.activated_affiliate_id;
+            }
+            return { error: null };
+          }
+        })
+      });
+
+      const mockActivateSupabase: any = {
+        auth: {
+          admin: {
+            listUsers: async () => ({ data: { users: [] }, error: null }),
+            createUser: async ({ email }: any) => ({
+              data: { user: { id: 'auth-aff-uid-1', email } },
+              error: null
+            })
+          },
+          signInWithPassword: async () => ({
+            data: { session: { access_token: 'mock-supabase-aff-jwt' } },
+            error: null
+          })
+        },
+        from: buildQueryMock
+      };
+
+      setSupabaseAdminForTesting(mockActivateSupabase);
+      try {
+        const res = await makeRequest(serverUrl, 'POST', '/api/auth/activate', {
+          email: affEmail,
+          referenceNumber: appRef,
+          password: 'PartnerPassword2026!'
+        });
+
+        if (res.status !== 200 || !res.body.success) {
+          throw new Error(`Expected 200 activation success, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+        if (insertedAffiliates.length !== 1) {
+          throw new Error('Expected affiliate record inserted into public.affiliates');
+        }
+        if (insertedAffiliates[0].referral_code !== 'STERLING-R3-2') {
+          throw new Error(`Expected collision-free code STERLING-R3-2, got ${insertedAffiliates[0].referral_code}`);
+        }
+        if (!upsertedProfile || upsertedProfile.role !== 'affiliate') {
+          throw new Error(`Expected profiles upsert with role=affiliate, got ${JSON.stringify(upsertedProfile)}`);
+        }
+        if (linkedAppAffId !== 'aff-new-7741') {
+          throw new Error(`Expected affiliate_applications.activated_affiliate_id linkage, got ${linkedAppAffId}`);
+        }
+        if (res.body.token !== 'mock-supabase-aff-jwt') {
+          throw new Error(`Expected Supabase session access_token returned, got ${res.body.token}`);
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+    });
+
+    // 35. Public Referral Intake (/api/referrals/inquire) writes client_registrations + linked client_inquiries + referral_leads
+    await runTest('35. Referral intake (/api/referrals/inquire) validates inputs and commits to client_registrations, client_inquiries, and referral_leads', async () => {
+      const insertedTables: string[] = [];
+      let capturedInqRow: any = null;
+      let capturedLeadRow: any = null;
+      const mockIntakeSupabase: any = {
+        from: (table: string) => ({
+          select: () => ({
+            eq: (_col: string, val: any) => ({
+              maybeSingle: async () => {
+                if (table === 'affiliates') {
+                  return {
+                    data: {
+                      id: 'aff-ref-99',
+                      affiliate_number: 'R3-AFF-0099',
+                      user_id: 'uid-99',
+                      full_name: 'Referrer Partner',
+                      email: 'referrer@partner.us',
+                      referral_code: String(val).toUpperCase(),
+                      status: 'active',
+                      approved_rate_percent: 10,
+                      total_clicks: 5,
+                      unique_visitors: 4,
+                      joined_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString()
+                    },
+                    error: null
+                  };
+                }
+                return { data: null, error: null };
+              }
+            }),
+            ilike: () => ({
+              order: async () => ({ data: [], error: null })
+            })
+          }),
+          insert: (row: any) => {
+            insertedTables.push(table);
+            if (table === 'affiliate_applications') {
+              throw new Error('Referral intake must NEVER insert into affiliate_applications');
+            }
+            if (table === 'client_inquiries') capturedInqRow = row;
+            if (table === 'referral_leads') capturedLeadRow = row;
+            return {
+              select: () => ({
+                single: async () => ({
+                  data: {
+                    ...row,
+                    id: table === 'client_registrations' ? 'reg-ref-555' : `${table}_1`,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                  },
+                  error: null
+                })
+              }),
+              then: (cb: any) => Promise.resolve({ error: null }).then(cb)
+            };
+          }
+        })
+      };
+
+      setSupabaseAdminForTesting(mockIntakeSupabase);
+      try {
+        const badRes = await makeRequest(serverUrl, 'POST', '/api/referrals/inquire', {
+          clientName: 'A',
+          email: 'bad-email',
+          serviceInterest: ''
+        });
+        if (badRes.status !== 400) {
+          throw new Error(`Expected 400 validation failure for /api/referrals/inquire, got ${badRes.status}`);
+        }
+
+        const okRes = await makeRequest(serverUrl, 'POST', '/api/referrals/inquire', {
+          referralCode: 'PARTNER-US',
+          clientName: 'Harborview Institutional Trust',
+          organization: 'Harborview Trust Corp',
+          email: `intake.${Date.now()}@harborview.us`,
+          phone: '+1 (617) 555-0142',
+          country: 'United States (Massachusetts)',
+          serviceInterest: 'Corporate Risk Advisory',
+          briefSummary: 'Referred US corporate trustee intake.'
+        });
+        if (okRes.status !== 201 || !okRes.body.leadAttributed) {
+          throw new Error(`Expected 201 with leadAttributed=true, got ${okRes.status}: ${JSON.stringify(okRes.body)}`);
+        }
+        if (!insertedTables.includes('client_registrations') || !insertedTables.includes('client_inquiries') || !insertedTables.includes('referral_leads')) {
+          throw new Error(`Missing required inserts: ${insertedTables.join(', ')}`);
+        }
+        if (capturedInqRow?.registration_id !== 'reg-ref-555') {
+          throw new Error(`Expected client_inquiries.registration_id=reg-ref-555, got ${capturedInqRow?.registration_id}`);
+        }
+        if (capturedLeadRow?.affiliate_id !== 'aff-ref-99') {
+          throw new Error(`Expected referral_leads.affiliate_id=aff-ref-99, got ${capturedLeadRow?.affiliate_id}`);
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+    });
+
+    // 36. Affiliate Direct Lead Registration + Admin Referrals / Clicks Timestamp Ordering
+    await runTest('36. Affiliate /submit-lead writes referral_leads and /admin/referrals queries referral_clicks.timestamp with camelCase DTO mapping', async () => {
+      let clicksOrderCol = '';
+      const storedLeads: any[] = [];
+      const mockAffRow = {
+        id: 'aff-lead-1',
+        affiliate_number: 'R3-AFF-4411',
+        user_id: 'uid-aff-lead-1',
+        full_name: 'Direct Lead Partner',
+        email: 'direct.partner@r3-partner.us',
+        referral_code: 'DIRECT-R3',
+        status: 'active',
+        approved_rate_percent: 12.0,
+        total_clicks: 10,
+        unique_visitors: 8,
+        joined_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      const mockLeadSupabase: any = {
+        auth: {
+          getUser: async () => ({
+            data: { user: { id: 'uid-aff-lead-1', email: 'direct.partner@r3-partner.us' } },
+            error: null
+          })
+        },
+        from: (table: string) => ({
+          select: () => ({
+            eq: (_col: string, val: any) => ({
+              maybeSingle: async () => {
+                if (table === 'profiles') {
+                  return { data: { id: 'uid-aff-lead-1', email: 'direct.partner@r3-partner.us', full_name: 'Direct Lead Partner', role: 'affiliate', status: 'active' }, error: null };
+                }
+                if (table === 'affiliates') {
+                  return { data: mockAffRow, error: null };
+                }
+                return { data: null, error: null };
+              },
+              order: async () => ({ data: table === 'referral_leads' ? storedLeads : [], error: null })
+            }),
+            order: (col: string) => {
+              if (table === 'referral_clicks') {
+                clicksOrderCol = col;
+                return Promise.resolve({
+                  data: [{
+                    id: 'clk-1',
+                    referral_code: 'DIRECT-R3',
+                    affiliate_id: 'aff-lead-1',
+                    visitor_hash: 'vh-1',
+                    is_unique: true,
+                    timestamp: new Date().toISOString()
+                  }],
+                  error: null
+                });
+              }
+              return Promise.resolve({ data: table === 'referral_leads' ? storedLeads : [], error: null });
+            }
+          }),
+          insert: (row: any) => {
+            if (table === 'referral_leads') {
+              const saved = { ...row, id: 'lead-direct-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+              storedLeads.push(saved);
+              return { select: () => ({ single: async () => ({ data: saved, error: null }) }) };
+            }
+            return { error: null };
+          }
+        })
+      };
+
+      setSupabaseAdminForTesting(mockLeadSupabase);
+      try {
+        const leadRes = await makeRequest(
+          serverUrl,
+          'POST',
+          '/api/affiliates/submit-lead',
+          {
+            clientIdentifier: 'Pacific Coast Logistics Corp',
+            clientType: 'Corporate',
+            region: 'United States (California)',
+            serviceCategory: 'Executive Contingency Retainer',
+            estimatedValue: 150000,
+            notes: 'COO introduction scheduled'
+          },
+          { Authorization: 'Bearer mock-aff-token' }
+        );
+
+        if (leadRes.status !== 201 || leadRes.body.lead?.clientIdentifier !== 'Pacific Coast Logistics Corp') {
+          throw new Error(`Expected 201 with camelCase lead DTO, got ${leadRes.status}: ${JSON.stringify(leadRes.body)}`);
+        }
+
+        const adminRefs = await makeRequest(
+          serverUrl,
+          'GET',
+          '/api/admin/referrals',
+          null,
+          { Authorization: 'Bearer admin-dev-token' }
+        );
+        // Verify admin route with mocked profiles -> admin auth user
+        if (adminRefs.status !== 403 && adminRefs.status !== 401 && adminRefs.status !== 200) {
+          throw new Error(`Unexpected admin referrals status: ${adminRefs.status}`);
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+
+      // Now verify GET /api/admin/referrals with super_admin Supabase profile mock
+      const mockAdminRefSupabase: any = {
+        auth: {
+          getUser: async () => ({
+            data: { user: { id: 'admin-uid-1', email: 'services@r3-konaffiliate.online' } },
+            error: null
+          })
+        },
+        from: (table: string) => ({
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => {
+                if (table === 'profiles') {
+                  return { data: { id: 'admin-uid-1', email: 'services@r3-konaffiliate.online', full_name: 'Director', role: 'super_admin', status: 'active' }, error: null };
+                }
+                return { data: null, error: null };
+              }
+            }),
+            order: (col: string) => {
+              if (table === 'referral_clicks') clicksOrderCol = col;
+              if (table === 'referral_leads') return Promise.resolve({ data: storedLeads, error: null });
+              return Promise.resolve({
+                data: [{
+                  id: 'clk-1',
+                  referral_code: 'DIRECT-R3',
+                  affiliate_id: 'aff-lead-1',
+                  visitor_hash: 'vh-1',
+                  is_unique: true,
+                  timestamp: new Date().toISOString()
+                }],
+                error: null
+              });
+            }
+          })
+        })
+      };
+
+      setSupabaseAdminForTesting(mockAdminRefSupabase);
+      try {
+        const refsRes = await makeRequest(
+          serverUrl,
+          'GET',
+          '/api/admin/referrals',
+          null,
+          { Authorization: 'Bearer admin-mock-jwt' }
+        );
+        if (refsRes.status !== 200) {
+          throw new Error(`Expected 200 from /api/admin/referrals, got ${refsRes.status}: ${JSON.stringify(refsRes.body)}`);
+        }
+        if (clicksOrderCol !== 'timestamp') {
+          throw new Error(`referral_clicks must order by 'timestamp' column, got '${clicksOrderCol}'`);
+        }
+        if (refsRes.body.leads?.[0]?.clientIdentifier !== 'Pacific Coast Logistics Corp') {
+          throw new Error('Admin referrals endpoint missing mapped camelCase lead DTO');
+        }
+        if (refsRes.body.clicks?.[0]?.referralCode !== 'DIRECT-R3') {
+          throw new Error('Admin referrals endpoint missing mapped camelCase click DTO');
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+    });
+
+    // 37. Authenticated Client Portal Brief (/api/client/inquiries) + Admin Client CRM Dossier Visibility
+    await runTest('37. Client Portal brief links registrationId and appears in both Client Portal and Admin Client CRM inquiries endpoint', async () => {
+      const briefRes = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/client/inquiries',
+        {
+          serviceInterest: 'Asset Protection & Structuring',
+          briefSummary: 'Supplemental Nevada statutory trust coordination brief.',
+          priority: 'high'
+        },
+        clientAuthHeader
+      );
+      if (briefRes.status !== 201 || !briefRes.body.inquiryId) {
+        throw new Error(`Expected 201 with inquiryId, got ${briefRes.status}: ${JSON.stringify(briefRes.body)}`);
+      }
+      if (briefRes.body.registrationId !== clientRegistrationId) {
+        throw new Error(`Expected inquiry linked to registrationId ${clientRegistrationId}, got ${briefRes.body.registrationId}`);
+      }
+
+      const clientListRes = await makeRequest(serverUrl, 'GET', '/api/client/inquiries', null, clientAuthHeader);
+      if (clientListRes.status !== 200 || !clientListRes.body.inquiries?.some((i: any) => i.id === briefRes.body.inquiryId)) {
+        throw new Error('Submitted brief not visible in GET /api/client/inquiries');
+      }
+
+      const adminInqRes = await makeRequest(
+        serverUrl,
+        'GET',
+        `/api/admin/client-inquiries?registrationId=${encodeURIComponent(clientRegistrationId)}`,
+        null,
+        adminAuthHeader
+      );
+      if (adminInqRes.status !== 200) {
+        throw new Error(`Expected 200 from GET /api/admin/client-inquiries, got ${adminInqRes.status}`);
+      }
+      const linkedInqs = adminInqRes.body.inquiries || [];
+      if (linkedInqs.length < 2 || !linkedInqs.some((i: any) => i.id === briefRes.body.inquiryId)) {
+        throw new Error(`Admin CRM inquiries endpoint missing linked client briefs (${linkedInqs.length} returned)`);
+      }
+    });
+
+    // 38. Corporate / Family Office Client Registration visibility across CRM endpoints
+    await runTest('38. Corporate & family office client registration commits to client_registrations + client_inquiries and renders in Admin CRM', async () => {
+      const corpClientEmail = `familyoffice.${Date.now()}@apexfo.us`;
+      const regRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: 'Managing Partner Catherine Hayes',
+        email: corpClientEmail,
+        phone: '+1 (415) 555-0177',
+        company: 'Apex Multi-Family Office LLC',
+        country: 'United States (Wyoming)',
+        serviceCategory: 'Private Family Office Sovereignty',
+        requirementsBrief: 'Wyoming trust & US institutional contingency retainer.'
+      });
+      if (regRes.status !== 201 || !regRes.body.registrationId) {
+        throw new Error(`Expected 201 for family office registration, got ${regRes.status}: ${JSON.stringify(regRes.body)}`);
+      }
+
+      const crmRes = await makeRequest(serverUrl, 'GET', '/api/admin/client-registrations', null, adminAuthHeader);
+      const savedReg = (crmRes.body.registrations || []).find((r: any) => r.id === regRes.body.registrationId);
+      if (!savedReg || savedReg.company !== 'Apex Multi-Family Office LLC') {
+        throw new Error('Family office corporate registration not visible in Admin Client CRM list');
+      }
+
+      const crmInqRes = await makeRequest(
+        serverUrl,
+        'GET',
+        `/api/admin/client-inquiries?registrationId=${encodeURIComponent(regRes.body.registrationId)}`,
+        null,
+        adminAuthHeader
+      );
+      if (!crmInqRes.body.inquiries?.length) {
+        throw new Error('Linked CRM inquiry not found for family office registration');
       }
     });
 

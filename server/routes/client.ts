@@ -640,23 +640,31 @@ clientRouter.post('/inquiries', requireAuth, requireRoles('client', 'super_admin
   const user = req.user!;
   const { serviceInterest, briefSummary, priority, country } = req.body;
 
-  if (!serviceInterest) {
+  if (!serviceInterest || typeof serviceInterest !== 'string' || serviceInterest.trim().length < 2) {
     return res.status(400).json({ error: 'Service interest category is required.' });
   }
 
+  if (briefSummary !== undefined && (typeof briefSummary !== 'string' || briefSummary.trim().length < 5)) {
+    return res.status(400).json({ error: 'Brief summary must be at least 5 characters when provided.' });
+  }
+
   try {
+    const registration = await getClientRegistrationByEmail(user.email);
     const inquiry = await insertClientInquiry({
       clientId: user.id,
+      registrationId: registration?.id,
       clientName: user.fullName,
       email: user.email,
-      country: country || 'United States',
-      serviceInterest,
+      country: country && typeof country === 'string' && country.trim() ? country.trim() : 'United States',
+      serviceInterest: serviceInterest.trim(),
       briefSummary: briefSummary ? briefSummary.trim() : undefined,
       priority: priority || 'high'
     });
 
     res.status(201).json({
       success: true,
+      inquiryId: inquiry.id,
+      registrationId: registration?.id || null,
       referenceNumber: inquiry.referenceNumber,
       message: 'Inquiry logged confidentially under strict non-disclosure protocol.'
     });

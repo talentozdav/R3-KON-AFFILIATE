@@ -9,7 +9,8 @@ import {
   CommissionRule,
   Payout,
   AuditLogEntry,
-  ReferralLead
+  ReferralLead,
+  ClientInquiry
 } from '../types';
 
 let currentAuthToken: string | null = localStorage.getItem('r3_auth_token');
@@ -402,6 +403,11 @@ export const api = {
     return request(`/api/admin/client-registrations/${id}/resend-invite`, {
       method: 'POST'
     });
+  },
+
+  async getAdminClientInquiries(registrationId?: string): Promise<{ inquiries: ClientInquiry[] }> {
+    const query = registrationId ? `?registrationId=${encodeURIComponent(registrationId)}` : '';
+    return request(`/api/admin/client-inquiries${query}`);
   },
 
   async getAdminClientNotes(registrationId: string): Promise<{ notes: any[] }> {
