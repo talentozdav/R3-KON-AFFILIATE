@@ -7,7 +7,8 @@ import {
   getAffiliateByUserId,
   getAffiliateApplicationByRef,
   createAffiliate,
-  recordAuditLog
+  recordAuditLog,
+  resolveAppOrigin
 } from '../supabase.js';
 import { AuthenticatedRequest } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../services/mailer.js';
@@ -381,7 +382,7 @@ authRouter.post('/forgot-password', async (req: AuthenticatedRequest, res: Respo
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
+  const origin = resolveAppOrigin(req);
 
   try {
     if (supabaseAdmin) {

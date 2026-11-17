@@ -33,7 +33,9 @@ import { app } from '../server.js';
 import {
   extractProjectRef,
   resolveSupabaseConfig,
-  setSupabaseAdminForTesting
+  setSupabaseAdminForTesting,
+  createClientActivationToken,
+  resolveAppOrigin
 } from '../server/supabase.js';
 
 interface TestResult {
@@ -154,8 +156,10 @@ async function runSuite() {
       adminAuthHeader = { Authorization: `Bearer ${res.body.token}` };
     });
 
+  let clientRefNumber = '';
+
     // 3. Client registration & reference number
-    await runTest('3. Client corporate registration generates valid R3-CLT reference', async () => {
+    await runTest('3. Client corporate registration generates valid R3-CLT reference & linked inquiry', async () => {
       const payload = {
         fullName: 'Director Victoria Vance',
         email: clientEmail,
@@ -169,7 +173,15 @@ async function runSuite() {
       if (res.status !== 201) throw new Error(`Expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
       const refNum = res.body.referenceNumber || res.body.client?.referenceNumber;
       if (!refNum || !refNum.startsWith('R3-CLT-')) throw new Error(`Invalid reference number: ${refNum}`);
+      if (res.body.registrationSaved !== true) throw new Error('Expected registrationSaved === true');
+      if (!res.body.inquiryReferenceNumber?.startsWith('R3-INQ-')) {
+        throw new Error(`Expected linked inquiryReferenceNumber, got ${res.body.inquiryReferenceNumber}`);
+      }
+      if (res.body.emailStatus !== 'sent' && res.body.emailStatus !== 'queued') {
+        throw new Error(`Expected emailStatus sent|queued, got ${res.body.emailStatus}`);
+      }
       clientRegistrationId = res.body.registrationId || res.body.client?.id;
+      clientRefNumber = refNum;
     });
 
     // 4. Client duplicate registration prevention
@@ -184,11 +196,40 @@ async function runSuite() {
       if (res.status !== 409) throw new Error(`Expected 409 Conflict, got ${res.status}`);
     });
 
-    // 5. Client Activation & Login
-    await runTest('5. Client activates account and authenticates for portal access', async () => {
-      // Activate
+    // 5. Client Activation & Login (with mandatory invitation token enforcement)
+    await runTest('5. Client activation rejects public token-less requests and succeeds with valid invitation token', async () => {
+      // Negative check 1: public request without invitation token must be rejected
+      const unauthActRes = await makeRequest(serverUrl, 'POST', '/api/client/activate', {
+        email: clientEmail,
+        referenceNumber: clientRefNumber,
+        password: 'ClientPassword2026!'
+      });
+      if (unauthActRes.status !== 401 && unauthActRes.status !== 403) {
+        throw new Error(`Expected 401/403 without invitation token, got ${unauthActRes.status}`);
+      }
+
+      // Negative check 2: forged / mismatched token must be rejected
+      const badTokenRes = await makeRequest(serverUrl, 'POST', '/api/client/activate', {
+        email: clientEmail,
+        referenceNumber: clientRefNumber,
+        token: 'tampered.invalid-signature',
+        password: 'ClientPassword2026!'
+      });
+      if (badTokenRes.status !== 401 && badTokenRes.status !== 403) {
+        throw new Error(`Expected 401/403 with invalid token, got ${badTokenRes.status}`);
+      }
+
+      // Positive check: activate using validly signed invitation token
+      const validInviteToken = createClientActivationToken({
+        registrationId: clientRegistrationId,
+        referenceNumber: clientRefNumber,
+        email: clientEmail
+      });
+
       const actRes = await makeRequest(serverUrl, 'POST', '/api/client/activate', {
         email: clientEmail,
+        referenceNumber: clientRefNumber,
+        token: validInviteToken,
         password: 'ClientPassword2026!'
       });
       if (actRes.status !== 200) throw new Error(`Activation failed: ${actRes.status}: ${JSON.stringify(actRes.body)}`);
@@ -666,6 +707,230 @@ async function runSuite() {
       }
       if (clientsList.some((c: any) => String(c.referenceNumber).startsWith('R3-APP-'))) {
         throw new Error('Affiliate application leaked into Client CRM queue');
+      }
+    });
+
+    // 30. Supabase Client Registration Inserts into client_registrations + linked client_inquiries (NEVER affiliate_applications) & handles email failure gracefully
+    await runTest('30. Supabase CRM client registration writes client_registrations + linked client_inquiries + referral_leads & succeeds when email is queued', async () => {
+      const insertedTables: string[] = [];
+      let capturedInquiryRow: any = null;
+      let capturedLeadRow: any = null;
+      let capturedRedirectTo = '';
+      const fixedRegId = '11111111-2222-3333-4444-555555555555';
+
+      const mockCrmSupabase: any = {
+        auth: {
+          admin: {
+            generateLink: async (opts: any) => {
+              capturedRedirectTo = opts?.options?.redirectTo || '';
+              return { data: { properties: { action_link: capturedRedirectTo } }, error: null };
+            }
+          }
+        },
+        from: (table: string) => {
+          return {
+            select: () => ({
+              ilike: () => ({
+                order: async () => ({ data: [], error: null })
+              }),
+              eq: (_col: string, val: any) => ({
+                maybeSingle: async () => {
+                  if (table === 'affiliates') {
+                    return {
+                      data: {
+                        id: 'aff-mock-1',
+                        affiliate_number: 'R3-AFF-9001',
+                        user_id: 'usr-aff-1',
+                        full_name: 'Mock Advisor',
+                        email: 'advisor@firm.com',
+                        referral_code: String(val).toUpperCase(),
+                        status: 'active',
+                        approved_rate_percent: 10,
+                        total_clicks: 0,
+                        unique_visitors: 0,
+                        joined_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
+                      },
+                      error: null
+                    };
+                  }
+                  return { data: null, error: null };
+                }
+              })
+            }),
+            insert: (row: any) => {
+              insertedTables.push(table);
+              if (table === 'affiliate_applications') {
+                throw new Error('CRITICAL VIOLATION: client registration wrote to affiliate_applications!');
+              }
+              if (table === 'client_inquiries') {
+                capturedInquiryRow = row;
+              }
+              if (table === 'referral_leads') {
+                capturedLeadRow = row;
+              }
+              return {
+                select: () => ({
+                  single: async () => ({
+                    data: {
+                      ...row,
+                      id: table === 'client_registrations' ? fixedRegId : `${table}_id_1`,
+                      created_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString()
+                    },
+                    error: null
+                  })
+                }),
+                then: (onFulfilled: any) => Promise.resolve({ error: null }).then(onFulfilled)
+              };
+            },
+            update: () => ({
+              eq: async () => ({ error: null })
+            }),
+            delete: () => ({
+              eq: async () => ({ error: null })
+            })
+          };
+        }
+      };
+
+      const prevAppUrl = process.env.APP_URL;
+      delete process.env.APP_URL;
+      setSupabaseAdminForTesting(mockCrmSupabase);
+      try {
+        const res = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+          fullName: 'Evelyn Mercer',
+          email: `evelyn.mercer.${Date.now()}@mercertrust.us`,
+          phone: '+1 (212) 555-0188',
+          company: 'Mercer Fiduciary Partners LLC',
+          country: 'United States (New York)',
+          serviceCategory: 'Executive Contingency Retainer',
+          requirementsBrief: 'Delaware & NY corporate contingency coordination.',
+          referralCode: 'PARTNER-R3'
+        });
+
+        if (res.status !== 201) {
+          throw new Error(`Expected 201 even when RESEND_API_KEY is absent/queued, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+        if (!insertedTables.includes('client_registrations') || !insertedTables.includes('client_inquiries')) {
+          throw new Error(`Missing required CRM table inserts: ${insertedTables.join(', ')}`);
+        }
+        if (insertedTables.includes('affiliate_applications')) {
+          throw new Error('Client registration wrote to affiliate_applications');
+        }
+        if (!capturedInquiryRow || capturedInquiryRow.registration_id !== fixedRegId) {
+          throw new Error(`client_inquiries.registration_id mismatch: expected ${fixedRegId}, got ${capturedInquiryRow?.registration_id}`);
+        }
+        if (!capturedLeadRow || capturedLeadRow.referral_code !== 'PARTNER-R3') {
+          throw new Error('Referral attribution did not record referral_leads entry');
+        }
+        if (!capturedRedirectTo.startsWith('https://r3-konaffiliate.online/client-portal?')) {
+          throw new Error(`Invitation redirect URL must use https://r3-konaffiliate.online, got: ${capturedRedirectTo}`);
+        }
+        if (!capturedRedirectTo.includes('token=')) {
+          throw new Error('Invitation redirect URL must embed a signed activation token');
+        }
+        if (res.body.registrationSaved !== true || res.body.emailSent !== false || res.body.emailStatus !== 'queued') {
+          throw new Error(`Expected honest emailSent=false & emailStatus=queued, got: ${JSON.stringify(res.body)}`);
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+        if (prevAppUrl !== undefined) process.env.APP_URL = prevAppUrl;
+      }
+    });
+
+    // 31. Prevent password overwrite of already-confirmed/existing auth accounts via /api/client/activate
+    await runTest('31. /api/client/activate blocks overwriting password of existing active auth user', async () => {
+      const regId = '99999999-2222-3333-4444-555555555555';
+      const refNum = 'R3-CLT-2026-8888';
+      const targetEmail = 'existing.confirmed.user@enterprise.com';
+      let updateCalled = false;
+
+      const mockConflictSupabase: any = {
+        auth: {
+          admin: {
+            listUsers: async () => ({
+              data: {
+                users: [
+                  {
+                    id: 'auth-existing-user-1',
+                    email: targetEmail,
+                    email_confirmed_at: new Date().toISOString(),
+                    last_sign_in_at: new Date().toISOString(),
+                    user_metadata: { role: 'client' }
+                  }
+                ]
+              },
+              error: null
+            }),
+            updateUserById: async () => {
+              updateCalled = true;
+              return { error: null };
+            }
+          }
+        },
+        from: (table: string) => ({
+          select: () => ({
+            ilike: () => ({
+              order: async () => ({
+                data: table === 'client_registrations' ? [{
+                  id: regId,
+                  reference_number: refNum,
+                  full_name: 'Existing User',
+                  email: targetEmail,
+                  country: 'United States',
+                  service_category: 'Executive Contingency Retainer',
+                  status: 'PENDING',
+                  invitation_status: 'sent',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                }] : [],
+                error: null
+              })
+            }),
+            eq: () => ({
+              maybeSingle: async () => ({ data: null, error: null })
+            })
+          })
+        })
+      };
+
+      setSupabaseAdminForTesting(mockConflictSupabase);
+      try {
+        const validToken = createClientActivationToken({
+          registrationId: regId,
+          referenceNumber: refNum,
+          email: targetEmail
+        });
+        const res = await makeRequest(serverUrl, 'POST', '/api/client/activate', {
+          email: targetEmail,
+          referenceNumber: refNum,
+          token: validToken,
+          password: 'AttackerPassword2026!'
+        });
+
+        if (res.status !== 409) {
+          throw new Error(`Expected 409 Conflict for existing confirmed user, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+        if (updateCalled) {
+          throw new Error('SECURITY FAILURE: updateUserById was called on an existing active user!');
+        }
+      } finally {
+        setSupabaseAdminForTesting(null);
+      }
+    });
+
+    // 32. Production domain origin resolver check
+    await runTest('32. Production domain resolves strictly to https://r3-konaffiliate.online', async () => {
+      const prevAppUrl = process.env.APP_URL;
+      delete process.env.APP_URL;
+      try {
+        const resolved = resolveAppOrigin({ headers: {} });
+        if (resolved !== 'https://r3-konaffiliate.online') {
+          throw new Error(`Expected https://r3-konaffiliate.online, got ${resolved}`);
+        }
+      } finally {
+        if (prevAppUrl !== undefined) process.env.APP_URL = prevAppUrl;
       }
     });
 

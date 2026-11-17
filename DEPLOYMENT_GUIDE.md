@@ -2,7 +2,7 @@
 
 **Brand**: R3 Contingencies  
 **Product**: R3 Global Affiliate Network  
-**Live Vercel Deployment**: `https://r3-kon-affiliate.vercel.app/`  
+**Live Production Domain**: `https://r3-konaffiliate.online/`  
 **Official Secretariat Email**: `services@r3-konaffiliate.online`  
 **Official Direct Phone**: `+1(931)366-0615`  
 **Date**: November 2026  
@@ -14,7 +14,7 @@
 During deep architectural and asset auditing of the live Vercel deployment and source codebase, several critical production blockers were identified:
 
 1. **Deployment Static Asset 404 Failures**:
-   - Local/AI Studio images rendered in development but failed on Vercel (`https://r3-kon-affiliate.vercel.app/`).
+   - Local/AI Studio images rendered in development but failed on production (`https://r3-konaffiliate.online/`).
    - Root Cause: Vite's development server serves files from the raw local filesystem (`src/assets/...`), whereas in production Vite bundles into `dist/`. Direct JSX/HTML string references such as `src="/src/assets/images/hero_executive_suite.jpg"` or `src="/public/..."` fail to be recognized as bundled modules, resulting in HTTP 404 errors on static hosts.
    - Favicons and emblems were missing from the production output root.
 2. **Fabricated & Demo Data Contamination**:
@@ -131,7 +131,7 @@ PORT=3000
 VERCEL=1
 
 # Application URLs
-APP_URL=https://r3-kon-affiliate.vercel.app/
+APP_URL=https://r3-konaffiliate.online/
 
 # Official Support Contact Configuration
 SUPPORT_EMAIL=services@r3-konaffiliate.online

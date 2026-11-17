@@ -348,6 +348,7 @@ export const api = {
     fullName?: string;
     referenceNumber?: string;
     token?: string;
+    accessToken?: string;
   }): Promise<{ success: boolean; message: string; token: string }> {
     const res = await request<{ success: boolean; message: string; token: string }>('/api/client/activate', {
       method: 'POST',

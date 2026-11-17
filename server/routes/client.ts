@@ -6,29 +6,30 @@ import {
   updateClientRegistrationInvitation,
   insertClientInquiry,
   getClientInquiries,
+  backfillClientInquiryClientId,
   getAffiliateByCode,
   createReferralLead,
   recordAuditLog,
   signInWithSupabasePassword,
   supabaseAdmin,
-  isProduction
+  isProduction,
+  resolveAppOrigin,
+  createClientActivationToken,
+  verifyClientActivationToken
 } from '../supabase.js';
 import {
   sendClientAccountInvitation,
   sendClientActivationConfirmation
 } from '../services/mailer.js';
 import { AuthenticatedRequest, requireAuth, requireRoles } from '../middleware/auth.js';
-import crypto from 'crypto';
 
 export const clientRouter = Router();
-
-// Development-only in-memory token store when running without Supabase service credentials
-const clientActivationTokens: Map<string, { email: string; registrationId: string; expiresAt: number }> = new Map();
 
 /**
  * 1. POST /api/client/register
  * Public client registration gateway with strict input validation,
- * CRM persistence, affiliate lead attribution, and immediate transactional invitation.
+ * CRM persistence in client_registrations + linked client_inquiries,
+ * affiliate lead attribution, and transactional invitation dispatch.
  */
 clientRouter.post('/register', async (req: Request, res: Response) => {
   try {
@@ -82,7 +83,7 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    // 1. Save permanently to Supabase CRM (public.client_registrations)
+    // 1. Save permanently to Supabase CRM (public.client_registrations ONLY — never affiliate_applications)
     const registration = await insertClientRegistration({
       fullName: fullName.trim(),
       email: normalizedEmail,
@@ -94,22 +95,35 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       referralCode: referralCode ? String(referralCode).trim().toUpperCase() : undefined
     });
 
-    // Record linked client inquiry if brief/category provided (non-fatal if auxiliary record logs warning)
-    await insertClientInquiry({
-      registrationId: registration.id,
-      clientName: fullName.trim(),
-      email: normalizedEmail,
-      phone: phone ? String(phone).trim() : undefined,
-      organization: company ? String(company).trim() : undefined,
-      country: country.trim(),
-      serviceInterest: serviceCategory.trim(),
-      briefSummary: requirementsBrief ? String(requirementsBrief).trim() : undefined,
-      priority: 'high'
-    }).catch(inqErr => {
-      console.warn('[R3 Client Register] Linked inquiry record notice:', inqErr.message);
-    });
+    // 2. Create associated CRM record in public.client_inquiries linked via registration_id
+    let linkedInquiry: { id: string; referenceNumber: string };
+    try {
+      linkedInquiry = await insertClientInquiry({
+        registrationId: registration.id,
+        clientName: fullName.trim(),
+        email: normalizedEmail,
+        phone: phone ? String(phone).trim() : undefined,
+        organization: company ? String(company).trim() : undefined,
+        country: country.trim(),
+        serviceInterest: serviceCategory.trim(),
+        briefSummary: requirementsBrief ? String(requirementsBrief).trim() : undefined,
+        priority: 'high'
+      });
+    } catch (inqErr: any) {
+      if (supabaseAdmin) {
+        await supabaseAdmin
+          .from('client_registrations')
+          .delete()
+          .eq('id', registration.id)
+          .then(
+            () => undefined,
+            () => undefined
+          );
+      }
+      throw new Error(inqErr.message || 'Failed to persist linked client inquiry record.');
+    }
 
-    // 2. If attributed via affiliate referral code, register lead in permanent affiliate tracking
+    // 3. If attributed via affiliate referral code, preserve lead in permanent affiliate tracking
     if (referralCode && typeof referralCode === 'string' && referralCode.trim()) {
       try {
         const cleanCode = referralCode.trim().toUpperCase();
@@ -144,9 +158,18 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       }
     }
 
-    // 3. Initiate Account Creation Invitation via Resend (failures here must NOT report DB registration failure)
-    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
-    let invitationUrl = `${origin}/client-portal?mode=activate&ref=${registration.referenceNumber}&email=${encodeURIComponent(normalizedEmail)}`;
+    // 4. Generate cryptographically signed activation token & production-domain URL
+    //    Email delivery failures below must NEVER roll back or erase the saved database records.
+    const origin = resolveAppOrigin(req);
+    const signedInvitationToken = createClientActivationToken({
+      registrationId: registration.id,
+      referenceNumber: registration.referenceNumber,
+      email: normalizedEmail
+    });
+    const activationRedirectUrl = `${origin}/client-portal?mode=activate&ref=${encodeURIComponent(
+      registration.referenceNumber
+    )}&email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(signedInvitationToken)}`;
+    let invitationUrl = activationRedirectUrl;
 
     if (supabaseAdmin) {
       try {
@@ -154,10 +177,11 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
           type: 'invite',
           email: normalizedEmail,
           options: {
-            redirectTo: `${origin}/client-portal?mode=activate&ref=${registration.referenceNumber}`,
+            redirectTo: activationRedirectUrl,
             data: {
               full_name: fullName.trim(),
-              role: 'client'
+              role: 'client',
+              registration_id: registration.id
             }
           }
         });
@@ -170,17 +194,9 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       } catch (err: any) {
         console.warn('[R3 Client Register] Auth invitation notice:', err.message);
       }
-    } else if (!isProduction) {
-      const token = crypto.randomBytes(32).toString('hex');
-      clientActivationTokens.set(token, {
-        email: normalizedEmail,
-        registrationId: registration.id,
-        expiresAt: Date.now() + 86400000
-      });
-      invitationUrl = `${origin}/client-portal?action=activate&token=${token}&email=${encodeURIComponent(normalizedEmail)}&ref=${registration.referenceNumber}`;
     }
 
-    // 4. Send Transactional Invitation Email safely
+    // 5. Send Transactional Invitation Email safely
     let emailSent = false;
     let emailError: string | undefined;
     try {
@@ -197,7 +213,7 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       console.warn('[R3 Client Register] Email dispatch warning:', mailErr.message);
     }
 
-    // Update registration invitation status in database (non-fatal if status update fails after registration insert)
+    // Update registration invitation status in database (non-fatal after registration insert)
     await updateClientRegistrationInvitation(
       registration.id,
       emailSent ? 'sent' : 'failed',
@@ -208,18 +224,22 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
 
     res.status(201).json({
       success: true,
+      registrationSaved: true,
       referenceNumber: registration.referenceNumber,
+      registrationId: registration.id,
+      inquiryId: linkedInquiry.id,
+      inquiryReferenceNumber: linkedInquiry.referenceNumber,
       client: {
         id: registration.id,
         referenceNumber: registration.referenceNumber,
         fullName: fullName.trim(),
         email: normalizedEmail
       },
+      emailSent,
+      emailStatus: emailSent ? 'sent' : 'queued',
       message: emailSent
         ? 'Client registration recorded. Your account creation invitation has been dispatched to your email.'
-        : 'Client registration recorded. Note: Transactional email delivery is queued for dispatch.',
-      emailSent,
-      registrationId: registration.id
+        : 'Client registration recorded. Note: Transactional email delivery is queued for dispatch.'
     });
   } catch (err: any) {
     console.error('[R3 Client Register Error]:', err);
@@ -232,10 +252,12 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
 
 /**
  * 2. POST /api/client/activate
- * Client completes account creation by setting their security password and activating Supabase Auth account.
+ * Client completes account creation by presenting a verified invitation token
+ * (or Supabase invite session JWT) and setting their security password.
+ * Public requests without a valid invitation token are rejected and cannot overwrite existing users.
  */
 clientRouter.post('/activate', async (req: Request, res: Response) => {
-  const { email, password, referenceNumber } = req.body;
+  const { email, password, referenceNumber, token, accessToken } = req.body;
 
   if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
     return res.status(400).json({ error: 'Email and password are required.' });
@@ -248,7 +270,7 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
   const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    // Verify a valid, non-declined, unactivated client registration exists before setting password
+    // Verify a valid, non-declined, unactivated client registration exists
     const registration = await getClientRegistrationByEmail(normalizedEmail);
     if (!registration) {
       return res.status(404).json({
@@ -257,7 +279,11 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
       });
     }
 
-    if (referenceNumber && typeof referenceNumber === 'string' && referenceNumber.trim().toUpperCase() !== registration.referenceNumber.toUpperCase()) {
+    if (
+      referenceNumber &&
+      typeof referenceNumber === 'string' &&
+      referenceNumber.trim().toUpperCase() !== registration.referenceNumber.toUpperCase()
+    ) {
       return res.status(400).json({
         error: 'Reference Mismatch',
         message: 'The supplied registration reference number does not match this email address.'
@@ -271,8 +297,63 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
       });
     }
 
+    if (registration.invitationStatus === 'expired') {
+      return res.status(410).json({
+        error: 'Invitation Expired',
+        message: 'This invitation has expired. Please contact the R3 Secretariat to reissue your portal invitation.'
+      });
+    }
+
+    // Verify invitation proof: either our HMAC-signed registration token OR a Supabase Auth invite JWT
+    let verifiedViaToken = false;
+    let verifiedViaSupabaseInviteJwt = false;
+    let verifiedAuthUserId: string | undefined;
+    let tokenFailureReason = 'A valid invitation token is required to activate a client account.';
+
+    if (typeof token === 'string' && token.trim()) {
+      const check = verifyClientActivationToken(token.trim(), {
+        registrationId: registration.id,
+        referenceNumber: registration.referenceNumber,
+        email: normalizedEmail
+      });
+      if (check.valid) {
+        verifiedViaToken = true;
+      } else if (check.reason) {
+        tokenFailureReason = check.reason;
+      }
+    }
+
+    if (!verifiedViaToken && supabaseAdmin) {
+      const authHeader = req.headers.authorization;
+      const candidateJwt =
+        (authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : '') ||
+        (typeof accessToken === 'string' ? accessToken.trim() : '');
+
+      if (candidateJwt) {
+        const { data: userRes, error: jwtErr } = await supabaseAdmin.auth.getUser(candidateJwt);
+        const jwtUser = userRes?.user;
+        if (!jwtErr && jwtUser && jwtUser.email?.toLowerCase() === normalizedEmail) {
+          const boundRegId = jwtUser.user_metadata?.registration_id;
+          if (!boundRegId || boundRegId === registration.id) {
+            verifiedViaSupabaseInviteJwt = true;
+            verifiedAuthUserId = jwtUser.id;
+          } else {
+            tokenFailureReason = 'Invitation session does not match this registration record.';
+          }
+        } else {
+          tokenFailureReason = 'Supabase invitation session token is invalid or expired.';
+        }
+      }
+    }
+
+    if (!verifiedViaToken && !verifiedViaSupabaseInviteJwt) {
+      return res.status(401).json({
+        error: 'Invalid or Missing Invitation Token',
+        message: `${tokenFailureReason} Please open the official activation link sent to your registered email address.`
+      });
+    }
+
     if (supabaseAdmin) {
-      // Check if an existing user in profiles holds a non-client role (prevent account takeover)
       const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers();
       if (listErr) {
         throw new Error(`Auth lookup error: ${listErr.message}`);
@@ -295,10 +376,48 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
           });
         }
 
+        const { data: existingClientProfile } = await supabaseAdmin
+          .from('client_profiles')
+          .select('id, status')
+          .eq('id', existing.id)
+          .maybeSingle();
+
+        if (existingClientProfile) {
+          return res.status(409).json({
+            error: 'Account Already Activated',
+            message: 'An active client profile already exists for this email address. Please sign in or use password recovery.'
+          });
+        }
+
+        // Prevent overwriting an already-confirmed/active auth account unless verified directly via Supabase session JWT for this invite
+        const alreadyActiveUser =
+          Boolean(existing.last_sign_in_at) ||
+          (Boolean(existing.email_confirmed_at) &&
+            existing.user_metadata?.registration_id !== registration.id &&
+            !verifiedViaSupabaseInviteJwt);
+
+        if (alreadyActiveUser) {
+          return res.status(409).json({
+            error: 'Account Conflict',
+            message: 'An authenticated account already exists for this email address and cannot have its password reset through public onboarding.'
+          });
+        }
+
+        if (verifiedAuthUserId && verifiedAuthUserId !== existing.id) {
+          return res.status(403).json({
+            error: 'Identity Mismatch',
+            message: 'Authenticated invitation identity does not match existing record.'
+          });
+        }
+
         const { error: updErr } = await supabaseAdmin.auth.admin.updateUserById(existing.id, {
           password,
           email_confirm: true,
-          user_metadata: { role: 'client', full_name: registration.fullName }
+          user_metadata: {
+            role: 'client',
+            full_name: registration.fullName,
+            registration_id: registration.id
+          }
         });
         if (updErr) {
           throw new Error(`Failed to activate client credentials: ${updErr.message}`);
@@ -310,7 +429,8 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
           email_confirm: true,
           user_metadata: {
             role: 'client',
-            full_name: registration.fullName
+            full_name: registration.fullName,
+            registration_id: registration.id
           }
         });
 
@@ -350,13 +470,18 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
         throw new Error(`Database error updating registration activation status: ${regUpdErr.message}`);
       }
 
-      // 4. Send confirmation email safely
+      // 4. Link pre-activation client_inquiries row to new client_id so portal displays initial brief
+      await backfillClientInquiryClientId(registration.id, userId).catch(err =>
+        console.warn('[R3 Client Activate] Inquiry backfill notice:', err.message)
+      );
+
+      // 5. Send confirmation email safely
       sendClientActivationConfirmation({
         email: normalizedEmail,
         fullName: req.body.fullName?.trim() || registration.fullName || 'Valued Client'
       }).catch(err => console.warn('[R3 Client Activate] Confirmation email notice:', err.message));
 
-      // 5. Generate authentic Supabase Auth session token
+      // 6. Generate authentic Supabase Auth session token
       const signInResult = await signInWithSupabasePassword(normalizedEmail, password);
       const sessionToken = signInResult?.data?.session?.access_token;
       if (!sessionToken) {
@@ -382,6 +507,7 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
 
     // Local in-memory fallback for development/test fixtures
     await updateClientRegistrationInvitation(registration.id, 'accepted');
+    await backfillClientInquiryClientId(registration.id, registration.id);
     res.json({
       success: true,
       message: 'Account activated successfully (development test mode).',

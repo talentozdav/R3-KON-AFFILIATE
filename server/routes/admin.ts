@@ -35,7 +35,9 @@ import {
   bootstrapAdminUser,
   signInWithSupabasePassword,
   isProduction,
-  supabaseAdmin
+  supabaseAdmin,
+  resolveAppOrigin,
+  createClientActivationToken
 } from '../supabase.js';
 import { sendClientAccountInvitation, sendAffiliateApprovalActivation } from '../services/mailer.js';
 
@@ -320,8 +322,15 @@ adminRouter.post('/client-registrations/:id/resend-invite', requireRoles('super_
       return res.status(404).json({ error: 'Registration record not found.' });
     }
 
-    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
-    const invitationUrl = `${origin}/client-portal?mode=activate&ref=${reg.referenceNumber}&email=${encodeURIComponent(reg.email)}`;
+    const origin = resolveAppOrigin(req);
+    const signedToken = createClientActivationToken({
+      registrationId: reg.id,
+      referenceNumber: reg.referenceNumber,
+      email: reg.email
+    });
+    const invitationUrl = `${origin}/client-portal?mode=activate&ref=${encodeURIComponent(
+      reg.referenceNumber
+    )}&email=${encodeURIComponent(reg.email)}&token=${encodeURIComponent(signedToken)}`;
 
     const emailResult = await sendClientAccountInvitation({
       email: reg.email,
@@ -568,7 +577,7 @@ adminRouter.post('/applications/:id/activate', requireRoles('super_admin', 'affi
     }
 
     // Dispatch welcome / activation notification (non-blocking if mailer unavailable)
-    const origin = req.headers.origin || process.env.APP_URL || 'https://r3-kon-affiliate.vercel.app';
+    const origin = resolveAppOrigin(req);
     sendAffiliateApprovalActivation({
       email: app.email,
       fullName: app.fullName,

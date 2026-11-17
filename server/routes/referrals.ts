@@ -6,6 +6,7 @@ import {
   createReferralLead,
   insertClientInquiry,
   insertClientRegistration,
+  getClientRegistrationByEmail,
   recordAuditLog
 } from '../supabase.js';
 
@@ -144,10 +145,28 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
       );
     }
 
-    // 2. Persist directly into Supabase CRM tables
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // 2. Persist into Supabase CRM tables: ensure client_registrations record exists first, then link client_inquiries.registration_id
+    let registration = await getClientRegistrationByEmail(normalizedEmail);
+    if (!registration) {
+      registration = await insertClientRegistration({
+        fullName: clientName.trim(),
+        email: normalizedEmail,
+        phone: phone ? phone.trim() : undefined,
+        company: organization ? organization.trim() : undefined,
+        country: country ? country.trim() : 'United States',
+        serviceCategory: serviceInterest,
+        requirementsBrief: briefSummary ? briefSummary.trim() : undefined,
+        referralCode: cleanCode || undefined
+      });
+    }
+
     const inquiryRecord = await insertClientInquiry({
+      registrationId: registration.id,
+      clientId: registration.userId,
       clientName: clientName.trim(),
-      email: email.trim().toLowerCase(),
+      email: normalizedEmail,
       phone: phone ? phone.trim() : undefined,
       organization: organization ? organization.trim() : undefined,
       country: country ? country.trim() : 'United States',
@@ -155,21 +174,12 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
       briefSummary: briefSummary ? briefSummary.trim() : undefined
     });
 
-    await insertClientRegistration({
-      fullName: clientName.trim(),
-      email: email.trim().toLowerCase(),
-      phone: phone ? phone.trim() : undefined,
-      company: organization ? organization.trim() : undefined,
-      country: country ? country.trim() : 'United States',
-      serviceCategory: serviceInterest,
-      requirementsBrief: briefSummary ? briefSummary.trim() : undefined,
-      referralCode: cleanCode || undefined
-    });
-
     res.status(201).json({
       success: true,
       message: 'Your inquiry has been received by R3 Contingencies executive intake. A senior coordinator will contact you confidentially.',
       referenceNumber: inquiryRecord.referenceNumber,
+      registrationId: registration.id,
+      registrationReferenceNumber: registration.referenceNumber,
       attributed: Boolean(affiliateId),
       leadAttributed: Boolean(affiliateId),
       referralCode: cleanCode || null

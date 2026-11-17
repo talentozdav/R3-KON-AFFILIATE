@@ -1,7 +1,113 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import crypto from 'crypto';
 import { db as memoryDb } from './db.js';
 
+export const PRODUCTION_APP_URL = 'https://r3-konaffiliate.online';
 export const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+
+const DEV_EPHEMERAL_INVITE_SECRET = crypto.randomBytes(32).toString('hex');
+
+export function resolveAppOrigin(req?: { headers?: Record<string, any> }): string {
+  const configured = process.env.APP_URL?.trim();
+  if (configured) {
+    return configured.replace(/\/+$/, '');
+  }
+  if (!isProduction && typeof req?.headers?.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)) {
+    return req.headers.origin.replace(/\/+$/, '');
+  }
+  return PRODUCTION_APP_URL;
+}
+
+function getClientActivationHmacKey(): Buffer {
+  const baseSecret =
+    process.env.CLIENT_ACTIVATION_SECRET?.trim() ||
+    process.env.SUPABASE_SECRET_KEY?.trim() ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
+    process.env.ADMIN_BOOTSTRAP_KEY?.trim() ||
+    (!isProduction ? DEV_EPHEMERAL_INVITE_SECRET : '');
+
+  if (!baseSecret) {
+    throw new Error('Server-side activation signing secret is unavailable.');
+  }
+
+  return crypto.createHmac('sha256', 'r3-client-activation-key-v1').update(baseSecret).digest();
+}
+
+export function createClientActivationToken(params: {
+  registrationId: string;
+  referenceNumber: string;
+  email: string;
+  ttlSeconds?: number;
+}): string {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const ttl = params.ttlSeconds ?? 7 * 24 * 60 * 60;
+  const payload = {
+    v: 1,
+    sub: params.registrationId,
+    ref: params.referenceNumber.trim().toUpperCase(),
+    email: params.email.trim().toLowerCase(),
+    iat: nowSec,
+    exp: nowSec + ttl
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', getClientActivationHmacKey())
+    .update(encodedPayload)
+    .digest('base64url');
+  return `${encodedPayload}.${sig}`;
+}
+
+export function verifyClientActivationToken(
+  token: string,
+  expected: { registrationId: string; referenceNumber: string; email: string }
+): { valid: boolean; reason?: string } {
+  if (!token || typeof token !== 'string' || !token.includes('.')) {
+    return { valid: false, reason: 'Malformed or missing invitation token.' };
+  }
+
+  const parts = token.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return { valid: false, reason: 'Invalid invitation token structure.' };
+  }
+
+  const [encodedPayload, providedSig] = parts;
+
+  try {
+    const expectedSig = crypto
+      .createHmac('sha256', getClientActivationHmacKey())
+      .update(encodedPayload)
+      .digest('base64url');
+
+    const providedBuf = Buffer.from(providedSig, 'utf8');
+    const expectedBuf = Buffer.from(expectedSig, 'utf8');
+    if (providedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(providedBuf, expectedBuf)) {
+      return { valid: false, reason: 'Invitation token signature verification failed.' };
+    }
+
+    const decoded = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    if (!decoded || typeof decoded !== 'object' || decoded.v !== 1) {
+      return { valid: false, reason: 'Unsupported invitation token version.' };
+    }
+    if (typeof decoded.exp !== 'number' || decoded.exp < nowSec) {
+      return { valid: false, reason: 'Invitation token has expired.' };
+    }
+    if (decoded.sub !== expected.registrationId) {
+      return { valid: false, reason: 'Invitation token does not match registration record.' };
+    }
+    if (String(decoded.ref || '').toUpperCase() !== expected.referenceNumber.trim().toUpperCase()) {
+      return { valid: false, reason: 'Invitation token reference mismatch.' };
+    }
+    if (String(decoded.email || '').toLowerCase() !== expected.email.trim().toLowerCase()) {
+      return { valid: false, reason: 'Invitation token email mismatch.' };
+    }
+
+    return { valid: true };
+  } catch {
+    return { valid: false, reason: 'Unable to parse or verify invitation token.' };
+  }
+}
 
 export interface SupabaseConfigStatus {
   supabaseUrl: string;
@@ -1851,6 +1957,28 @@ export async function getClientInquiries(clientId?: string): Promise<any[]> {
     return memoryClientInquiries.filter(i => i.clientId === clientId);
   }
   return memoryClientInquiries;
+}
+
+export async function backfillClientInquiryClientId(registrationId: string, clientId: string): Promise<void> {
+  if (supabaseAdmin) {
+    const { error } = await supabaseAdmin
+      .from('client_inquiries')
+      .update({ client_id: clientId, updated_at: new Date().toISOString() })
+      .eq('registration_id', registrationId)
+      .is('client_id', null);
+
+    if (error) {
+      throw new Error(`Database error linking client inquiry to activated profile: ${error.message}`);
+    }
+    return;
+  }
+
+  assertSupabaseInProduction();
+  memoryClientInquiries.forEach(inq => {
+    if (inq.registrationId === registrationId && !inq.clientId) {
+      inq.clientId = clientId;
+    }
+  });
 }
 
 export async function insertClientNote(data: {

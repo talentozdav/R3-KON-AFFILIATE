@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../lib/api';
 import { X, Lock, KeyRound, UserCheck, ArrowRight, CheckCircle2, HelpCircle } from 'lucide-react';
@@ -13,7 +13,7 @@ interface LoginModalProps {
 type AuthMode = 'login' | 'activate' | 'forgot';
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const { login, activateAccount } = useAuth();
+  const { login, activateAccount, refreshUser } = useAuth();
   const [mode, setMode] = useState<AuthMode>('login');
 
   // Sign in fields
@@ -23,6 +23,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
   // Activation fields
   const [activateEmail, setActivateEmail] = useState('');
   const [activateRef, setActivateRef] = useState('');
+  const [activateToken, setActivateToken] = useState('');
+  const [activateAccessToken, setActivateAccessToken] = useState('');
   const [activatePassword, setActivatePassword] = useState('');
   const [activateConfirm, setActivateConfirm] = useState('');
 
@@ -33,6 +35,28 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const params = new URLSearchParams(window.location.search);
+    const isActivateUrl = params.get('mode') === 'activate' || params.get('action') === 'activate';
+    if (isActivateUrl) {
+      setMode('activate');
+      const refParam = params.get('ref');
+      const emailParam = params.get('email');
+      const tokenParam = params.get('token');
+      if (refParam) setActivateRef(refParam.trim().toUpperCase());
+      if (emailParam) setActivateEmail(emailParam.trim());
+      if (tokenParam) setActivateToken(tokenParam.trim());
+
+      const hash = window.location.hash ? window.location.hash.replace(/^#/, '') : '';
+      if (hash) {
+        const hashParams = new URLSearchParams(hash);
+        const access = hashParams.get('access_token');
+        if (access) setActivateAccessToken(access.trim());
+      }
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -75,7 +99,21 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     setErrorMsg(null);
 
     try {
-      const msg = await activateAccount(activateEmail.trim(), activateRef.trim(), activatePassword);
+      const cleanRef = activateRef.trim().toUpperCase();
+      let msg = '';
+      if (cleanRef.startsWith('R3-CLT-')) {
+        const res = await api.activateClientAccount({
+          email: activateEmail.trim(),
+          referenceNumber: cleanRef,
+          password: activatePassword,
+          token: activateToken.trim() || undefined,
+          accessToken: activateAccessToken.trim() || undefined
+        });
+        await refreshUser();
+        msg = res.message;
+      } else {
+        msg = await activateAccount(activateEmail.trim(), cleanRef, activatePassword);
+      }
       setSuccessMsg(msg || 'Account activated successfully. Accessing portal...');
       setTimeout(() => {
         onSuccess();
@@ -258,20 +296,36 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
 
             <div>
               <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
-                Application Reference Code
+                Application / Client Reference Code
               </label>
               <input
                 type="text"
                 value={activateRef}
                 onChange={(e) => setActivateRef(e.target.value.toUpperCase())}
-                placeholder="R3-2026-XXXX"
+                placeholder="R3-APP-2026-XXXX or R3-CLT-2026-XXXX"
                 required
                 className="w-full text-xs font-mono uppercase px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
               />
               <span className="text-[10px] text-stone-500 font-light mt-0.5 block">
-                Issued upon application submission and confirmed upon intake approval.
+                Issued upon application approval or client invitation dispatch.
               </span>
             </div>
+
+            {activateRef.trim().toUpperCase().startsWith('R3-CLT-') && !activateAccessToken && (
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
+                  Invitation Token
+                </label>
+                <input
+                  type="text"
+                  value={activateToken}
+                  onChange={(e) => setActivateToken(e.target.value)}
+                  placeholder="Provided automatically via your invitation link"
+                  required
+                  className="w-full text-xs font-mono px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
