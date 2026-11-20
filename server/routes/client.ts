@@ -22,6 +22,7 @@ import {
   sendClientActivationConfirmation
 } from '../services/mailer.js';
 import { AuthenticatedRequest, requireAuth, requireRoles } from '../middleware/auth.js';
+import { validateInternationalPhone, isValidEmail } from '../utils/validation.js';
 
 export const clientRouter = Router();
 
@@ -51,13 +52,19 @@ clientRouter.post('/register', async (req: Request, res: Response) => {
       errors.fullName = 'Full legal name is required.';
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!email || typeof email !== 'string' || !emailRegex.test(email.trim())) {
+    if (!email || typeof email !== 'string' || !isValidEmail(email)) {
       errors.email = 'Valid business or personal email is required.';
     }
 
+    if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
+      const phoneCheck = validateInternationalPhone(String(phone));
+      if (!phoneCheck.valid) {
+        errors.phone = phoneCheck.error || 'Valid international telephone number with country code is required.';
+      }
+    }
+
     if (!country || typeof country !== 'string' || country.trim().length < 2) {
-      errors.country = 'U.S. state or primary jurisdiction is required.';
+      errors.country = 'Country or primary jurisdiction is required.';
     }
 
     if (!serviceCategory || typeof serviceCategory !== 'string' || serviceCategory.trim().length < 2) {
@@ -655,7 +662,10 @@ clientRouter.post('/inquiries', requireAuth, requireRoles('client', 'super_admin
       registrationId: registration?.id,
       clientName: user.fullName,
       email: user.email,
-      country: country && typeof country === 'string' && country.trim() ? country.trim() : 'United States',
+      country:
+        country && typeof country === 'string' && country.trim()
+          ? country.trim()
+          : registration?.country || 'International',
       serviceInterest: serviceInterest.trim(),
       briefSummary: briefSummary ? briefSummary.trim() : undefined,
       priority: priority || 'high'

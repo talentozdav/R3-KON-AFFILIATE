@@ -44,6 +44,11 @@ import {
   Building,
   UserCheck
 } from 'lucide-react';
+import {
+  formatInternationalDate,
+  formatInternationalTimestampUTC,
+  formatCurrencyAmount
+} from '../../lib/international';
 
 interface AdminPortalProps {
   onClose: () => void;
@@ -113,7 +118,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [payoutAffiliateId, setPayoutAffiliateId] = useState('');
   const [payoutPeriod, setPayoutPeriod] = useState('November 2026 Cycle');
-  const [payoutMethod, setPayoutMethod] = useState('Fedwire (Domestic US)');
+  const [payoutMethod, setPayoutMethod] = useState('SWIFT International Wire');
 
   // Record Payment Modal state
   const [selectedPayout, setSelectedPayout] = useState<Payout | null>(null);
@@ -357,7 +362,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPayout || !wireRef.trim()) {
-      alert('Fedwire / ACH / wire payment reference is required');
+      alert('Bank / SWIFT / remittance payment reference is required');
       return;
     }
 
@@ -605,7 +610,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                     Approved Unpaid Commissions
                   </span>
                   <span className="font-mono text-3xl font-semibold text-[#D4AF37] tabular-nums">
-                    ${metrics.approvedUnpaidCommissions.toLocaleString()}
+                    {formatCurrencyAmount(metrics.approvedUnpaidCommissions, 'USD')}
                   </span>
                   <span className="block text-[11px] text-stone-500 mt-1 font-light">
                     USD scheduled for disbursement
@@ -618,13 +623,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 <div className="p-4 bg-white border border-[#E2DDD3]">
                   <span className="text-stone-500 block">Pending Commission Approvals</span>
                   <span className="font-mono text-xl font-medium text-[#0A192F] tabular-nums">
-                    ${metrics.pendingCommissionApproval.toLocaleString()} USD
+                    {formatCurrencyAmount(metrics.pendingCommissionApproval, 'USD')}
                   </span>
                 </div>
                 <div className="p-4 bg-white border border-[#E2DDD3]">
                   <span className="text-stone-500 block">Total Historical Disbursed Payouts</span>
                   <span className="font-mono text-xl font-medium text-[#0A192F] tabular-nums">
-                    ${metrics.totalPaidOutCommissions.toLocaleString()} USD
+                    {formatCurrencyAmount(metrics.totalPaidOutCommissions, 'USD')}
                   </span>
                 </div>
                 <div className="p-4 bg-white border border-[#E2DDD3]">
@@ -748,7 +753,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                             </span>
                           </td>
                           <td className="py-3.5 px-4 font-mono text-stone-500 text-[11px]">
-                            {new Date(app.submittedAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
+                            {formatInternationalDate(app.submittedAt)}
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             <button
@@ -907,7 +912,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                                 {lead.estimatedValue ? `$${Number(lead.estimatedValue).toLocaleString()}` : '—'}
                               </td>
                               <td className="py-3 px-4 font-mono text-stone-500 text-[11px]">
-                                {new Date(lead.createdAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
+                                {formatInternationalDate(lead.createdAt)}
                               </td>
                             </tr>
                           );
@@ -1198,7 +1203,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 <div>
                   <h3 className="font-serif text-2xl text-[#0A192F] font-normal">Disbursement Payout Batches</h3>
                   <p className="text-xs text-stone-600 font-light">
-                    Prepare payout batches for approved commissions and record completed U.S. Fedwire and ACH transfers.
+                    Prepare USD-denominated payout batches for approved commissions and record SWIFT international wires or local clearing transfers.
                   </p>
                 </div>
                 <button
@@ -1301,7 +1306,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                     {auditLogs.map((log) => (
                       <tr key={log.id} className="hover:bg-stone-50/60 transition-colors">
                         <td className="py-3 px-4 text-stone-500 whitespace-nowrap">
-                          {new Date(log.timestamp).toLocaleString('en-US', { hour12: false })}
+                          {formatInternationalTimestampUTC(log.timestamp)}
                         </td>
                         <td className="py-3 px-4 font-semibold text-[#0A192F]">
                           {log.action}
@@ -1375,15 +1380,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                               </div>
                             )}
                             <div className="font-mono text-[10px] text-stone-400 mt-0.5">
-                              {client.referenceNumber} · {new Date(client.createdAt).toLocaleDateString()}
+                              {client.referenceNumber} · {formatInternationalDate(client.createdAt)}
                             </div>
                           </td>
                           <td className="py-3.5 px-4 font-mono text-xs">
                             <div className="text-stone-800">{client.email}</div>
-                            <div className="text-stone-400 text-[11px] font-sans">{client.phone}</div>
+                            <div className="text-stone-400 text-[11px] font-sans">{client.phone || '—'}</div>
                           </td>
                           <td className="py-3.5 px-4 font-light text-stone-700">
-                            {client.country || 'United States'}
+                            {client.country || '—'}
                           </td>
                           <td className="py-3.5 px-4">
                             <span className="inline-block px-2 py-0.5 bg-stone-100 border border-stone-200 text-stone-800 text-[11px]">
@@ -1485,7 +1490,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
               Review Application: {selectedApp.referenceNumber}
             </h3>
             <p className="text-xs text-stone-600 mb-6 font-light">
-              Current Status: <strong className="font-mono text-[#0A192F]">{selectedApp.status}</strong> · Submitted: {new Date(selectedApp.submittedAt).toLocaleDateString()}
+              Current Status: <strong className="font-mono text-[#0A192F]">{selectedApp.status}</strong> · Submitted: {formatInternationalDate(selectedApp.submittedAt)}
             </p>
 
             <div className="space-y-4 text-xs bg-white border border-[#E2DDD3] p-6 mb-6">
@@ -1689,7 +1694,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 >
                   <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
                   <option value="Institutional Crisis Advisory">Institutional Crisis Advisory & Rapid Deployment</option>
-                  <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
+                  <option value="Private Client & Family Office Advisory">Private Client &amp; Family Office Advisory</option>
                 </select>
               </div>
 
@@ -1882,30 +1887,30 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
                   Rule Designation <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="text"
-                  value={ruleName}
-                  onChange={(e) => setRuleName(e.target.value)}
-                  placeholder="e.g. U.S. Delaware Fiduciary Special Tier"
-                  required
-                  className="w-full text-xs px-3.5 py-2 border border-stone-300 bg-white"
-                />
-              </div>
+                  <input
+                    type="text"
+                    value={ruleName}
+                    onChange={(e) => setRuleName(e.target.value)}
+                    placeholder="e.g. Global Multi-Region Corporate Tier"
+                    required
+                    className="w-full text-xs px-3.5 py-2 border border-stone-300 bg-white"
+                  />
+                </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
-                    Service Scope
-                  </label>
-                  <select
-                    value={ruleCategory}
-                    onChange={(e) => setRuleCategory(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-stone-300 bg-white"
-                  >
-                    <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
-                    <option value="Institutional Crisis Advisory">Institutional Crisis Advisory</option>
-                    <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
+                      Service Scope
+                    </label>
+                    <select
+                      value={ruleCategory}
+                      onChange={(e) => setRuleCategory(e.target.value)}
+                      className="w-full text-xs px-3 py-2 border border-stone-300 bg-white"
+                    >
+                      <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
+                      <option value="Institutional Crisis Advisory">Institutional Crisis Advisory</option>
+                      <option value="Private Client & Family Office Advisory">Private Client &amp; Family Office Advisory</option>
+                    </select>
                 </div>
                 <div>
                   <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
@@ -2026,10 +2031,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                   onChange={(e) => setPayoutMethod(e.target.value)}
                   className="w-full text-xs px-3.5 py-2 border border-stone-300 bg-white"
                 >
-                  <option value="Fedwire (Domestic US)">Fedwire (Domestic US)</option>
-                  <option value="ACH Direct Deposit (US)">ACH Direct Deposit (US)</option>
-                  <option value="US Domestic Bank Wire">US Domestic Bank Wire</option>
-                  <option value="SWIFT Wire Transfer">SWIFT Wire Transfer</option>
+                  <option value="SWIFT International Wire">SWIFT International Wire</option>
+                  <option value="SEPA / Eurozone Bank Transfer">SEPA / Eurozone Bank Transfer</option>
+                  <option value="UK Bank Transfer (CHAPS / Faster Payments)">UK Bank Transfer (CHAPS / Faster Payments)</option>
+                  <option value="Local US Clearing (Fedwire / ACH)">Local US Clearing (Fedwire / ACH)</option>
+                  <option value="Multi-Region Bank Wire">Multi-Region Bank Wire</option>
                 </select>
               </div>
 
@@ -2074,7 +2080,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                   type="text"
                   value={wireRef}
                   onChange={(e) => setWireRef(e.target.value)}
-                  placeholder="e.g. FEDWIRE-R3-994102-CITI"
+                  placeholder="e.g. SWIFT-R3-994102-INTL"
                   required
                   className="w-full text-xs font-mono px-3.5 py-2.5 border border-stone-300 bg-white"
                 />
@@ -2122,7 +2128,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
               Client CRM Dossier: {selectedClientForNotes.fullName}
             </h3>
             <p className="text-xs text-stone-600 mb-5 font-light">
-              Ref: <span className="font-mono text-[#0A192F]">{selectedClientForNotes.referenceNumber}</span> · {selectedClientForNotes.email} · {selectedClientForNotes.country || 'United States'}
+              Ref: <span className="font-mono text-[#0A192F]">{selectedClientForNotes.referenceNumber}</span> · {selectedClientForNotes.email} · {selectedClientForNotes.country || '—'}
             </p>
 
             {/* Linked Client Inquiries / Operational Briefs */}
@@ -2195,7 +2201,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                       <div key={note.id} className="p-3 bg-white border border-stone-200 text-xs space-y-1">
                         <div className="flex items-center justify-between text-[10px] text-stone-400 font-mono">
                           <span>{note.authorEmail}</span>
-                          <span>{new Date(note.createdAt).toLocaleDateString()}</span>
+                          <span>{formatInternationalDate(note.createdAt)}</span>
                         </div>
                         <p className="text-stone-800 leading-relaxed font-light">{note.content}</p>
                       </div>
@@ -2224,7 +2230,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                     type="text"
                     value={newFollowupNotes}
                     onChange={(e) => setNewFollowupNotes(e.target.value)}
-                    placeholder="e.g. Call regarding U.S. corporate compliance advisory"
+                    placeholder="e.g. Call regarding cross-border compliance advisory"
                     className="w-full text-xs p-2 bg-white border border-stone-300"
                   />
                   <button

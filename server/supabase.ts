@@ -1482,7 +1482,7 @@ export async function preparePayoutBatch(data: {
         amount: totalAmount,
         currency: 'USD',
         status: 'scheduled',
-        payment_method: data.paymentMethod || 'Fedwire (Domestic US)',
+        payment_method: data.paymentMethod || 'SWIFT International Wire',
         prepared_by: data.preparedBy
       })
       .select()
@@ -1514,7 +1514,7 @@ export async function preparePayoutBatch(data: {
     amount: totalAmount,
     currency: 'USD',
     status: 'scheduled' as const,
-    paymentMethod: data.paymentMethod || 'Fedwire (Domestic US)',
+    paymentMethod: data.paymentMethod || 'SWIFT International Wire',
     preparedBy: data.preparedBy,
     commissionIds: eligible.map((c: any) => c.id),
     createdAt: now
@@ -2116,7 +2116,7 @@ function mapClientInquiryRow(r: any) {
     email: r.email,
     phone: r.phone || undefined,
     organization: r.organization || undefined,
-    country: r.country || 'United States',
+    country: r.country || 'International',
     serviceInterest: r.service_interest,
     briefSummary: r.brief_summary || undefined,
     status: r.status,

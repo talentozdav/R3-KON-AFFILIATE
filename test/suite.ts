@@ -37,6 +37,15 @@ import {
   createClientActivationToken,
   resolveAppOrigin
 } from '../server/supabase.js';
+import { validateInternationalPhone as validateServerPhone } from '../server/utils/validation.js';
+import {
+  COUNTRIES,
+  getDialCodeForCountry,
+  validateInternationalPhone as validateClientPhone,
+  formatInternationalDate,
+  formatInternationalTimestampUTC,
+  formatCurrencyAmount
+} from '../src/lib/international.js';
 
 interface TestResult {
   name: string;
@@ -1516,6 +1525,261 @@ async function runSuite() {
       );
       if (!crmInqRes.body.inquiries?.length) {
         throw new Error('Linked CRM inquiry not found for family office registration');
+      }
+    });
+
+    // 39. Global Client Registrations Across All Key Countries + Phone & Country Validation
+    await runTest('39. Client registration persists international countries & E.164 phones across Nigeria, US, UK, Canada, UAE, South Africa, India, Australia, and Germany', async () => {
+      const globalSamples = [
+        { country: 'Nigeria', phone: '+234 803 123 4567', name: 'Chinedu Okafor', company: 'Lagos Maritime Holdings Ltd' },
+        { country: 'United States', phone: '+1 212 555 0140', name: 'Evelyn Brooks', company: 'Brooks Fiduciary LLC' },
+        { country: 'United Kingdom', phone: '+44 20 7946 0958', name: 'Oliver Kensington', company: 'Thames Advisory LLP' },
+        { country: 'Canada', phone: '+1 416 555 0198', name: 'Claire Bouchard', company: 'Laurentian Family Office' },
+        { country: 'United Arab Emirates', phone: '+971 50 123 4567', name: 'Tariq Al-Mansoor', company: 'Gulf Sovereign Holdings' },
+        { country: 'South Africa', phone: '+27 11 555 0123', name: 'Thabo Mokoena', company: 'Cape Meridian Capital' },
+        { country: 'India', phone: '+91 98201 12345', name: 'Priya Nair', company: 'Mumbai Industrial Group' },
+        { country: 'Australia', phone: '+61 2 9374 4000', name: 'Lachlan Reid', company: 'Southern Cross Holdings' },
+        { country: 'Germany', phone: '+49 30 1234567', name: 'Lukas Weber', company: 'Rheinland Industriewerke GmbH' }
+      ];
+
+      const submittedIds: Array<{ id: string; country: string; phone: string }> = [];
+
+      for (const sample of globalSamples) {
+        const res = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+          fullName: sample.name,
+          company: sample.company,
+          email: `global.${sample.country.toLowerCase().replace(/\s+/g, '')}.${Date.now()}@example.org`,
+          phone: sample.phone,
+          country: sample.country,
+          serviceCategory: 'Executive Contingency Retainer',
+          requirementsBrief: `International mandate registered from ${sample.country}.`
+        });
+
+        if (res.status !== 201 || !res.body.registrationId) {
+          throw new Error(`Failed registration for ${sample.country}: ${res.status} ${JSON.stringify(res.body)}`);
+        }
+        submittedIds.push({ id: res.body.registrationId, country: sample.country, phone: sample.phone });
+      }
+
+      // Verify exact country persistence in Admin CRM without US fallback override
+      const crmRes = await makeRequest(serverUrl, 'GET', '/api/admin/client-registrations', null, adminAuthHeader);
+      const regs = crmRes.body.registrations || [];
+      for (const expected of submittedIds) {
+        const found = regs.find((r: any) => r.id === expected.id);
+        if (!found) {
+          throw new Error(`Global registration for ${expected.country} missing from CRM`);
+        }
+        if (found.country !== expected.country) {
+          throw new Error(`Country mismatch: expected "${expected.country}", got "${found.country}"`);
+        }
+      }
+
+      // Negative validation checks: reject alphabetic phone, too-short phone, and missing country
+      const badPhoneRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: 'Invalid Phone Test',
+        email: `badphone.${Date.now()}@example.org`,
+        phone: '+44 INVALID-ABC',
+        country: 'United Kingdom',
+        serviceCategory: 'Executive Contingency Retainer'
+      });
+      if (badPhoneRes.status !== 400 || !badPhoneRes.body.details?.phone) {
+        throw new Error(`Expected 400 with details.phone for invalid phone, got ${badPhoneRes.status}`);
+      }
+
+      const shortPhoneRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: 'Short Phone Test',
+        email: `shortphone.${Date.now()}@example.org`,
+        phone: '12345',
+        country: 'Nigeria',
+        serviceCategory: 'Executive Contingency Retainer'
+      });
+      if (shortPhoneRes.status !== 400 || !shortPhoneRes.body.details?.phone) {
+        throw new Error(`Expected 400 with details.phone for short phone, got ${shortPhoneRes.status}`);
+      }
+
+      const missingCountryRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: 'Missing Country Test',
+        email: `nocountry.${Date.now()}@example.org`,
+        phone: '+234 803 123 4567',
+        country: '',
+        serviceCategory: 'Executive Contingency Retainer'
+      });
+      if (missingCountryRes.status !== 400 || !missingCountryRes.body.details?.country) {
+        throw new Error(`Expected 400 with details.country for empty country, got ${missingCountryRes.status}`);
+      }
+    });
+
+    // 40. International Affiliate Partner Applications (Individual & Business across multiple continents)
+    await runTest('40. Affiliate application accepts global candidates (Nigeria, UK, UAE, Germany) and rejects invalid phones', async () => {
+      const affiliateApplicants = [
+        {
+          ip: '10.20.0.1',
+          applicantType: 'Business',
+          fullName: 'Adebayo Adeyemi',
+          businessName: 'Victoria Island Fiduciary Advisors Ltd',
+          country: 'Nigeria',
+          phone: '+234 809 555 0144'
+        },
+        {
+          ip: '10.20.0.2',
+          applicantType: 'Individual',
+          fullName: 'Charlotte Ashworth',
+          country: 'United Kingdom',
+          phone: '+44 20 7946 0112'
+        },
+        {
+          ip: '10.20.0.3',
+          applicantType: 'Business',
+          fullName: 'Kareem Al-Fayed',
+          businessName: 'DIFC Cross-Border Advisory FZCO',
+          country: 'United Arab Emirates',
+          phone: '+971 4 555 0199'
+        },
+        {
+          ip: '10.20.0.4',
+          applicantType: 'Individual',
+          fullName: 'Hannah Schneider',
+          country: 'Germany',
+          phone: '+49 89 1234567'
+        }
+      ];
+
+      for (const appSample of affiliateApplicants) {
+        const res = await makeRequest(
+          serverUrl,
+          'POST',
+          '/api/applications',
+          {
+            fullName: appSample.fullName,
+            applicantType: appSample.applicantType,
+            businessName: appSample.businessName,
+            email: `aff.${appSample.country.toLowerCase().replace(/\s+/g, '')}.${Date.now()}@partner-intl.org`,
+            phone: appSample.phone,
+            country: appSample.country,
+            partnershipCategory: 'Cross-Border Regulatory & Compliance Advisory',
+            industryBackground: `International corporate governance and advisory experience based in ${appSample.country}.`,
+            audienceDescription: `Regional family offices, corporate boards, and institutional clients across ${appSample.country}.`,
+            partnershipObjectives: `Coordinate confidential cross-border client introductions from ${appSample.country}.`,
+            termsAccepted: true,
+            privacyAccepted: true
+          },
+          { 'X-Forwarded-For': appSample.ip }
+        );
+
+        if (res.status !== 201 || res.body.application?.country !== appSample.country) {
+          throw new Error(`Affiliate application failed for ${appSample.country}: ${res.status} ${JSON.stringify(res.body)}`);
+        }
+      }
+
+      // Invalid phone rejection
+      const invalidAppPhone = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/applications',
+        {
+          fullName: 'Bad Phone Applicant',
+          applicantType: 'Individual',
+          email: `badappphone.${Date.now()}@partner-intl.org`,
+          phone: 'not-a-phone',
+          country: 'India',
+          partnershipCategory: 'Wealth Advisory & Multi-Family Office',
+          industryBackground: 'Extensive international cross-border corporate advisory practice.',
+          audienceDescription: 'Regional corporate clients and institutional executives worldwide.',
+          partnershipObjectives: 'Establish compliant global referral partnership with R3 Contingencies.',
+          termsAccepted: true,
+          privacyAccepted: true
+        },
+        { 'X-Forwarded-For': '10.20.0.5' }
+      );
+      if (invalidAppPhone.status !== 400 || !invalidAppPhone.body.details?.phone) {
+        throw new Error(`Expected 400 with details.phone for bad affiliate phone, got ${invalidAppPhone.status}`);
+      }
+    });
+
+    // 41. Affiliate Portal Privacy Masking on Global Referral Introductions
+    await runTest('41. Global referral client registration masks PII from affiliate dashboard portal payload', async () => {
+      const secretClientEmail = `confidential.zurich.${Date.now()}@private-office.ch`;
+      const secretClientName = 'Confidential Principal K.V.';
+      const secretPhone = '+41 44 555 0199';
+
+      const regRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: secretClientName,
+        email: secretClientEmail,
+        phone: secretPhone,
+        company: 'Zurich Trust Mandate',
+        country: 'Switzerland',
+        serviceCategory: 'Private Client & Family Office Advisory',
+        requirementsBrief: 'Confidential cross-border continuity request.',
+        referralCode: activatedAffiliateCode
+      });
+      if (regRes.status !== 201) {
+        throw new Error(`Expected 201 for referred global registration, got ${regRes.status}`);
+      }
+
+      const portalRes = await makeRequest(
+        serverUrl,
+        'GET',
+        `/api/affiliates/portal?affiliateId=${encodeURIComponent(activatedAffiliateId)}`,
+        null,
+        adminAuthHeader
+      );
+      if (portalRes.status !== 200 || !portalRes.body.data) {
+        throw new Error(`Expected 200 for affiliate portal, got ${portalRes.status}`);
+      }
+
+      const serialized = JSON.stringify(portalRes.body.data);
+      if (serialized.includes(secretClientEmail) || serialized.includes(secretPhone) || serialized.includes(secretClientName)) {
+        throw new Error('PRIVACY FAILURE: Affiliate portal exposed raw client PII (email/phone/name)');
+      }
+      const attributedLead = (portalRes.body.data.leads || []).find((l: any) => l.region === 'Switzerland');
+      if (!attributedLead) {
+        throw new Error('Expected attributed Switzerland lead in affiliate portal leads list');
+      }
+    });
+
+    // 42. International Utilities: Country Directory, Phone Validation, UTC Dates, ISO-4217 Currency
+    await runTest('42. International frontend/server utilities validate target countries, E.164 phones, UTC dates, and USD currency formatting', async () => {
+      const requiredCountries = [
+        'Nigeria',
+        'United States',
+        'United Kingdom',
+        'Canada',
+        'United Arab Emirates',
+        'South Africa',
+        'India',
+        'Australia',
+        'Germany'
+      ];
+      for (const name of requiredCountries) {
+        if (!COUNTRIES.some(c => c.name === name) || !getDialCodeForCountry(name)) {
+          throw new Error(`Country missing or missing dial code in COUNTRIES directory: ${name}`);
+        }
+      }
+
+      const validPhones = ['+234 803 123 4567', '+44 20 7946 0958', '+971 50 123 4567', '+91 98201 12345', '+49 30 1234567'];
+      for (const p of validPhones) {
+        if (!validateClientPhone(p).valid || !validateServerPhone(p).valid) {
+          throw new Error(`Expected valid international phone for ${p}`);
+        }
+      }
+
+      if (validateClientPhone('invalid-phone').valid || validateServerPhone('12').valid) {
+        throw new Error('Expected invalid phone numbers to fail validation');
+      }
+
+      const formattedDate = formatInternationalDate('2026-11-20T18:30:00.000Z');
+      if (!formattedDate.includes('2026') || !formattedDate.includes('Nov')) {
+        throw new Error(`Unexpected international date format: ${formattedDate}`);
+      }
+
+      const formattedUtc = formatInternationalTimestampUTC('2026-11-20T18:30:00.000Z');
+      if (!formattedUtc.endsWith('UTC')) {
+        throw new Error(`Expected UTC suffix on audit timestamp, got: ${formattedUtc}`);
+      }
+
+      const formattedUsd = formatCurrencyAmount(12500, 'usd');
+      if (formattedUsd !== 'USD 12,500') {
+        throw new Error(`Expected "USD 12,500", got "${formattedUsd}"`);
       }
     });
 

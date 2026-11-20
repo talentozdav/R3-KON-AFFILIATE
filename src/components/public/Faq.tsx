@@ -7,11 +7,11 @@ export const Faq: React.FC = () => {
   const faqs = [
     {
       q: 'Who can apply to the R3 Global Affiliate Network?',
-      a: 'The program is open to qualified individual professionals and corporate advisory practices—including private wealth managers, family office directors, corporate counsel, M&A advisors, executive recruiters, and specialized crisis or security consultants. Applicants must demonstrate a reputable professional standing and client network.'
+      a: 'The program welcomes qualified individuals and corporate entities worldwide—including wealth advisors, family office directors, legal and tax consultants, executive advisors, and business introducers from any country. Applicants must demonstrate reputable professional standing and pass compliance screening.'
     },
     {
       q: 'Is affiliate approval automatic?',
-      a: 'No. Admission is never automatic. Every application undergoes a comprehensive compliance review and background audit by the R3 Intake Committee. Applications may be approved, declined, or placed on hold pending additional clarification.'
+      a: 'No. Admission is never automatic. Every application undergoes a thorough compliance review and KYC/due diligence audit by the R3 Intake Committee. Applications may be approved, declined, or placed on hold pending additional clarification.'
     },
     {
       q: 'How does referral tracking work?',
@@ -27,15 +27,15 @@ export const Faq: React.FC = () => {
     },
     {
       q: 'When and how are commissions paid?',
-      a: 'Commission settlements are batched by the Finance department following banking clearance of client retainers and IRS Form W-9 verification. Payouts are disbursed in USD via domestic U.S. banking rails (Fedwire, ACH Direct Deposit, or domestic wire transfer) according to scheduled settlement cycles.'
+      a: 'Commission settlements are batched by the Finance department following banking clearance of client engagements and required jurisdictional compliance/tax documentation. Currently, platform ledger calculations and payouts are denominated in USD (ISO 4217) and disbursed via SWIFT international wire or applicable local clearing rails according to scheduled monthly settlement cycles.'
     },
     {
       q: 'How can an affiliate access their dashboard?',
-      a: 'Once an application is approved and activated, partners sign in with their authorized corporate email address. The private portal displays live attribution metrics, referral codes, active leads, verified conversions, and audited payout history.'
+      a: 'Once an application is approved and activated, partners sign in with their authorized corporate or professional email address. The private portal displays live attribution metrics, referral codes, anonymized lead statuses, verified conversions, and audited payout history.'
     },
     {
       q: 'How can an affiliate contact partner support?',
-      a: 'Active affiliates and applicants can reach the R3 Partner Secretariat directly at services@r3-konaffiliate.online or by phone at +1(931)366-0615. Active partners also enjoy an integrated direct lead submission gateway and dedicated affiliate liaison in their private dashboard.'
+      a: 'Active affiliates and applicants can reach the R3 Partner Secretariat directly at services@r3-konaffiliate.online or by phone at +1(931)366-0615. Active partners also enjoy an integrated direct lead submission gateway inside their private dashboard.'
     }
   ];
 

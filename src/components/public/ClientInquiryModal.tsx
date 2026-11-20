@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { api } from '../../lib/api';
-import { X, CheckCircle2, Shield, ArrowRight } from 'lucide-react';
+import { X, CheckCircle2, ArrowRight } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
+import { COUNTRIES, getDialCodeForCountry, validateInternationalPhone } from '../../lib/international';
 
 interface ClientInquiryModalProps {
   isOpen: boolean;
@@ -29,20 +30,57 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleCountryChange = (selectedCountry: string) => {
+    const previousDial = country ? getDialCodeForCountry(country) : '';
+    setCountry(selectedCountry);
+
+    const nextDial = getDialCodeForCountry(selectedCountry);
+    if (!nextDial) return;
+
+    const trimmedPhone = phone.trim();
+    if (!trimmedPhone || trimmedPhone === previousDial) {
+      setPhone(`${nextDial} `);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientName || !email) return;
+    setErrorMsg(null);
+
+    if (!clientName.trim() || clientName.trim().length < 2) {
+      setErrorMsg('Please enter your full name or principal name.');
+      return;
+    }
+
+    if (!email.trim()) {
+      setErrorMsg('Please provide a valid email address.');
+      return;
+    }
+
+    if (!country.trim()) {
+      setErrorMsg('Please select your country or primary jurisdiction.');
+      return;
+    }
+
+    let normalizedPhone: string | undefined;
+    if (phone.trim()) {
+      const phoneCheck = validateInternationalPhone(phone);
+      if (!phoneCheck.valid) {
+        setErrorMsg(phoneCheck.error || 'Please enter a valid international telephone number with country calling code.');
+        return;
+      }
+      normalizedPhone = phone.trim();
+    }
 
     setIsSubmitting(true);
-    setErrorMsg(null);
 
     try {
       const res = await api.registerClient({
         fullName: clientName.trim(),
         company: organization.trim() || undefined,
         email: email.trim(),
-        phone: phone.trim() || undefined,
-        country: country.trim() || 'United States',
+        phone: normalizedPhone,
+        country: country.trim(),
         serviceCategory: serviceInterest,
         requirementsBrief: briefSummary.trim() || undefined,
         referralCode: referralCode || undefined
@@ -66,15 +104,17 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
     setPhone('');
     setCountry('');
     setBriefSummary('');
+    setErrorMsg(null);
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/60 backdrop-blur-xs">
-      <div className="bg-[#FAF9F6] border border-[#E2DDD3] max-w-lg w-full p-8 shadow-2xl relative">
+      <div className="bg-[#FAF9F6] border border-[#E2DDD3] max-w-lg w-full p-6 sm:p-8 shadow-2xl relative max-h-[92vh] overflow-y-auto">
         <button
           onClick={onClose}
-          className="absolute top-6 right-6 text-stone-500 hover:text-[#0A192F] transition-colors"
+          className="absolute top-5 right-5 text-stone-500 hover:text-[#0A192F] transition-colors"
+          aria-label="Close registration modal"
         >
           <X className="w-5 h-5" />
         </button>
@@ -85,10 +125,10 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
               <CheckCircle2 className="w-6 h-6" />
             </div>
             <span className="text-[10px] uppercase tracking-widest text-[#D4AF37] font-semibold block mb-1">
-              Confidential Intake & Registration Confirmed
+              Confidential Intake &amp; Registration Confirmed
             </span>
             <h3 className="font-serif text-2xl text-[#0A192F] font-normal mb-2">
-              Registration Recorded in Supabase CRM
+              Client Registration Submitted
             </h3>
 
             {referenceNumber && (
@@ -98,7 +138,7 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
             )}
 
             <p className="text-xs text-stone-600 leading-relaxed font-light mb-4 max-w-sm mx-auto">
-              Your registration has been confirmed. {emailDispatched ? 'An account creation invitation has been dispatched to your email address via Resend.' : 'Your account invitation is queued for dispatch.'} You may click the invitation link to set your password and access the private Client Portal.
+              Your registration has been confirmed. {emailDispatched ? 'An account activation invitation has been dispatched to your email address.' : 'Your account invitation is queued for dispatch.'} Use the activation link in your invitation email to configure your password and access the private Client Portal.
             </p>
 
             {referralCode && (
@@ -115,18 +155,18 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
           </div>
         ) : (
           <div>
-            <div className="mb-6">
+            <div className="mb-5">
               <div className="mb-3">
                 <BrandLogo variant="light" size="sm" showSubtitle={false} />
               </div>
               <span className="text-[10px] uppercase tracking-widest text-[#D4AF37] font-semibold block mb-1">
-                Executive Intake Gateway
+                International Client Intake Gateway
               </span>
               <h3 className="font-serif text-2xl text-[#0A192F] font-normal">
-                Confidential Client Inquiry
+                Register as Client / Confidential Inquiry
               </h3>
               <p className="text-xs text-stone-600 mt-1 font-light">
-                Introduce a client or request contingency coordination protocols. All submissions are protected under fiduciary non-disclosure.
+                Register an individual, corporate, or family office mandate from any jurisdiction worldwide under confidential review.
               </p>
               {referralCode && (
                 <div className="mt-3 text-[11px] font-mono text-[#0A192F] bg-stone-100 px-3 py-1.5 border border-stone-200 flex items-center gap-1.5">
@@ -151,7 +191,7 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                   type="text"
                   value={clientName}
                   onChange={(e) => setClientName(e.target.value)}
-                  placeholder="e.g. Marcus Aurelius"
+                  placeholder="e.g. Amaka Okafor / Daniel Alvarez"
                   required
                   className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                 />
@@ -165,12 +205,31 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                   type="text"
                   value={organization}
                   onChange={(e) => setOrganization(e.target.value)}
-                  placeholder="e.g. Aurelius Capital Holdings LLC"
+                  placeholder="e.g. Horizon Multi-Family Office Ltd"
                   className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
+                  Country / Jurisdiction <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={country}
+                  onChange={(e) => handleCountryChange(e.target.value)}
+                  required
+                  className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
+                >
+                  <option value="">Select your country or jurisdiction...</option>
+                  {COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.name}>
+                      {c.name} ({c.dialCode})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
                     Email <span className="text-red-500">*</span>
@@ -186,13 +245,13 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                 </div>
                 <div>
                   <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
-                    Phone / Direct Line
+                    Phone / Direct Line (with Calling Code)
                   </label>
                   <input
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+1 (212) 555-0140"
+                    placeholder="e.g. +44 20 7946 0958 or +234 803 123 4567"
                     className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                   />
                 </div>
@@ -209,8 +268,8 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                 >
                   <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
                   <option value="Institutional Crisis Advisory">Institutional Crisis Advisory &amp; Rapid Deployment</option>
-                  <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
-                  <option value="U.S. Federal & Multi-State Umbrella">U.S. Federal &amp; Multi-State Umbrella</option>
+                  <option value="Private Client & Family Office Advisory">Private Client &amp; Family Office Advisory</option>
+                  <option value="Cross-Border Corporate & Compliance Coordination">Cross-Border Corporate &amp; Compliance Coordination</option>
                 </select>
               </div>
 
@@ -222,7 +281,7 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                   rows={2}
                   value={briefSummary}
                   onChange={(e) => setBriefSummary(e.target.value)}
-                  placeholder="Confidential summary of situation or coverage requirements..."
+                  placeholder="Confidential summary of situation, jurisdiction, or coverage requirements..."
                   className="w-full text-xs p-3 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                 />
               </div>
@@ -233,7 +292,7 @@ export const ClientInquiryModal: React.FC<ClientInquiryModalProps> = ({
                   disabled={isSubmitting}
                   className="w-full inline-flex items-center justify-center gap-2 bg-[#0A192F] hover:bg-[#112240] text-[#FAF9F6] border border-[#1A2E4C] py-3 text-xs uppercase tracking-widest font-medium transition-colors disabled:opacity-50"
                 >
-                  <span>{isSubmitting ? 'Transmitting...' : 'Transmit Confidential Inquiry'}</span>
+                  <span>{isSubmitting ? 'Submitting Registration...' : 'Submit Confidential Registration'}</span>
                   <ArrowRight className="w-3.5 h-3.5 text-[#D4AF37]" />
                 </button>
               </div>

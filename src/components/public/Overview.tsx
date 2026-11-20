@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Building2, User, Globe2, FileCheck2, KeyRound } from 'lucide-react';
+import { Building2, Globe2, FileCheck2, KeyRound } from 'lucide-react';
 
 export const Overview: React.FC = () => {
   return (
@@ -12,10 +12,10 @@ export const Overview: React.FC = () => {
             <span>Institutional Framework</span>
           </div>
           <h2 className="font-serif text-3xl sm:text-4xl text-[#0A192F] font-normal tracking-tight leading-tight mb-4">
-            A Discreet, High-Calibre U.S. Partnership Architecture
+            A Discreet, International Partnership Architecture
           </h2>
           <p className="text-stone-600 text-base leading-relaxed font-light">
-            R3 Contingencies coordinates complex contingency, security, and emergency resolution protocols for U.S. enterprises, family offices, and senior executives. The Affiliate Network provides a structured, federally compliant mechanism for trusted advisors to introduce clients requiring domestic protection and registration continuity.
+            R3 Contingencies coordinates contingency planning, business risk support, and executive advisory protocols for individuals, corporations, and family offices across the globe. The Affiliate Network offers a structured, compliant channel for international advisors and corporate introducers to connect qualified clients with R3 services.
           </p>
         </div>
 
@@ -27,7 +27,7 @@ export const Overview: React.FC = () => {
               <div className="relative aspect-[4/3] overflow-hidden bg-stone-900">
                 <img
                   src="/images/partner_network_pavilion.jpg"
-                  alt="R3 U.S. Network Pavilion"
+                  alt="R3 Global Network Pavilion"
                   className="w-full h-full object-cover object-center filter brightness-[0.95]"
                   referrerPolicy="no-referrer"
                   onError={(e) => {
@@ -36,18 +36,20 @@ export const Overview: React.FC = () => {
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#0A192F]/60 via-transparent to-transparent pointer-events-none" />
                 <div className="absolute bottom-3 left-3 text-white text-[11px] font-sans tracking-wide">
-                  <span>U.S. Contingency Coordination</span>
+                  <span>International Contingency Coordination</span>
                 </div>
               </div>
             </div>
 
             <div className="mt-6 p-6 bg-white border border-[#E2DDD3]">
-              <h3 className="font-serif text-lg text-[#0A192F] font-normal mb-2">U.S. Compliance &amp; Integrity Charter</h3>
+              <h3 className="font-serif text-lg text-[#0A192F] font-normal mb-2">
+                Global Compliance &amp; Integrity Charter
+              </h3>
               <p className="text-xs text-stone-600 leading-relaxed font-light mb-4">
-                To maintain regulatory alignment across U.S. federal and state jurisdictions, all applications undergo thorough KYC, business registration verification, and OFAC/FinCEN reputational due diligence. R3 maintains zero tolerance for spam, misleading marketing, or mass consumer solicitation.
+                To maintain strong governance across international jurisdictions, all applications undergo thorough KYC, entity registration verification, and applicable sanctions/AML due diligence. R3 maintains zero tolerance for spam, misleading marketing, or mass consumer solicitation.
               </p>
               <div className="text-[11px] text-stone-500 uppercase tracking-wider font-mono">
-                U.S. Federal &amp; State Regulatory Compliance
+                Cross-Border KYC &amp; Governance Compliance
               </div>
             </div>
           </div>
@@ -58,9 +60,9 @@ export const Overview: React.FC = () => {
               <div className="w-9 h-9 bg-stone-100 flex items-center justify-center text-[#0A192F] mb-4">
                 <Building2 className="w-4 h-4" />
               </div>
-              <h4 className="font-serif text-lg text-[#0A192F] font-normal mb-2">Individual &amp; Corporate</h4>
+              <h4 className="font-serif text-lg text-[#0A192F] font-normal mb-2">Individuals, Corporates &amp; Family Offices</h4>
               <p className="text-xs text-stone-600 leading-relaxed font-light">
-                Applications are welcome from independent U.S. senior consultants as well as registered LLCs, corporations, fiduciary firms, and boutique advisory practices.
+                Applications and client registrations are welcomed from independent professionals as well as incorporated companies, advisory firms, and multi-jurisdictional family offices.
               </p>
             </div>
 
@@ -68,9 +70,9 @@ export const Overview: React.FC = () => {
               <div className="w-9 h-9 bg-stone-100 flex items-center justify-center text-[#0A192F] mb-4">
                 <Globe2 className="w-4 h-4" />
               </div>
-              <h4 className="font-serif text-lg text-[#0A192F] font-normal mb-2">U.S. National Eligibility</h4>
+              <h4 className="font-serif text-lg text-[#0A192F] font-normal mb-2">Worldwide Participation</h4>
               <p className="text-xs text-stone-600 leading-relaxed font-light">
-                Partners registered and operating across U.S. financial and commercial centers—including New York, Delaware, California, Texas, and Tennessee—are eligible, subject to federal and state compliance screening.
+                Open to clients and affiliate partners from every country—across Africa, Europe, the Americas, the Middle East, and Asia-Pacific—subject to standard compliance screening.
               </p>
             </div>
 
@@ -80,7 +82,7 @@ export const Overview: React.FC = () => {
               </div>
               <h4 className="font-serif text-lg text-[#0A192F] font-normal mb-2">Manual Verification</h4>
               <p className="text-xs text-stone-600 leading-relaxed font-light">
-                Every qualifying conversion is audited against executed retainer agreements and formal banking settlement before commission approval.
+                Every qualifying conversion is reviewed manually against executed client agreements and confirmed banking settlement before commission approval.
               </p>
             </div>
 
@@ -90,7 +92,7 @@ export const Overview: React.FC = () => {
               </div>
               <h4 className="font-serif text-lg text-[#0A192F] font-normal mb-2">Dedicated Portal Access</h4>
               <p className="text-xs text-stone-600 leading-relaxed font-light">
-                Approved affiliates receive secure credentials to a private dashboard with real-time attribution tracking, lead visibility, and audited commission ledgers.
+                Approved affiliates and clients receive secure credentials to dedicated portals with transparent referral attribution, brief tracking, and audited ledgers.
               </p>
             </div>
           </div>

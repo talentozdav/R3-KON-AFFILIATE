@@ -171,11 +171,14 @@ export const StatusLookupModal: React.FC<StatusLookupModalProps> = ({
               <div className="flex justify-between">
                 <span className="text-stone-500 font-light">Logged Date:</span>
                 <span className="font-mono text-stone-700">
-                  {new Date(appResult.submittedAt || '').toLocaleDateString('en-US', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric'
-                  })}
+                  {appResult.submittedAt
+                    ? new Date(appResult.submittedAt).toLocaleDateString('en-GB', {
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric',
+                        timeZone: 'UTC'
+                      })
+                    : '—'}
                 </span>
               </div>
             </div>

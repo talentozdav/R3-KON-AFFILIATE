@@ -19,6 +19,7 @@ import {
   FolderLock
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
+import { formatInternationalDate } from '../../lib/international';
 
 interface ClientPortalProps {
   onClose: () => void;
@@ -201,7 +202,7 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
                     {user?.membershipTier || 'Executive Contingency Retainer'}
                   </h3>
                   <p className="text-xs text-stone-600 mt-1 font-light leading-relaxed max-w-xl">
-                    Active U.S. coordination protocol. Direct access to 24/7 crisis response units, domestic asset security counsel, federal/state registration continuity, and rapid executive deployment.
+                    Active international coordination protocol. Priority access to dedicated crisis response units, cross-border asset protection counsel, corporate continuity planning, and executive deployment.
                   </p>
                 </div>
                 <div className="bg-stone-50 border border-stone-200 p-4 text-right shrink-0">
@@ -262,7 +263,7 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
                     Strict NDA Binding
                   </div>
                   <p className="text-xs text-stone-600 leading-relaxed font-light">
-                    All matters logged in this dossier remain protected under United States attorney-client privilege and fiduciary confidentiality standards.
+                    All matters logged in this dossier remain protected under strict bilateral non-disclosure protocols and international fiduciary confidentiality standards.
                   </p>
                 </div>
               </div>
@@ -362,7 +363,7 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
                       </div>
 
                       <div className="text-[11px] text-stone-400 font-mono flex items-center justify-between pt-2 border-t border-stone-100">
-                        <span>Logged: {new Date(inq.created_at || inq.createdAt || Date.now()).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                        <span>Logged: {formatInternationalDate(inq.created_at || inq.createdAt || new Date())}</span>
                         <span>Assigned Officer: {inq.assigned_coordinator || 'Intake Committee'}</span>
                       </div>
                     </div>
@@ -409,9 +410,9 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
                   >
                     <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
                     <option value="Institutional Crisis Advisory & Rapid Deployment">Institutional Crisis Advisory & Rapid Deployment</option>
-                    <option value="Private U.S. Principal & Fiduciary Support">Private U.S. Principal &amp; Fiduciary Support</option>
-                    <option value="Multi-State Corporate Asset Protection">Multi-State Corporate Asset Protection</option>
-                    <option value="Executive Security & Federal Defense">Executive Security &amp; Federal Defense</option>
+                    <option value="Private Client & Family Office Advisory">Private Client &amp; Family Office Advisory</option>
+                    <option value="Cross-Border Corporate Asset Protection">Cross-Border Corporate Asset Protection</option>
+                    <option value="Executive Security & Regulatory Defense">Executive Security &amp; Regulatory Defense</option>
                   </select>
                 </div>
 
@@ -438,7 +439,7 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
                     rows={6}
                     value={briefSummary}
                     onChange={(e) => setBriefSummary(e.target.value)}
-                    placeholder="Articulate the circumstances, U.S. states or federal jurisdictions involved, key personnel, or required operational support..."
+                    placeholder="Articulate the circumstances, countries or jurisdictions involved, key personnel, or required operational support..."
                     required
                     className="w-full text-xs p-3.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors font-light leading-relaxed"
                   />
@@ -462,9 +463,9 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
           {activeTab === 'security' && (
             <div className="space-y-6">
               <div className="bg-white border border-[#E2DDD3] p-6 space-y-4">
-                <h3 className="font-serif text-xl text-[#0A192F]">U.S. Security Architecture &amp; Compliance Governance</h3>
+                <h3 className="font-serif text-xl text-[#0A192F]">Global Security Architecture &amp; Compliance Governance</h3>
                 <p className="text-xs text-stone-600 leading-relaxed font-light">
-                  R3 Contingencies operates under United States federal and state compliance architectures adhering to Delaware corporate governance, U.S. fiduciary disclosure regulations, FinCEN BSA/AML screening, and binding federal non-disclosure protocols.
+                  R3 Contingencies operates under cross-border corporate governance standards, international anti-money laundering (AML/KYC) due diligence, and binding non-disclosure protocols tailored for clients worldwide.
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-stone-100 text-xs">
                   <div className="p-4 bg-stone-50 border border-stone-200">

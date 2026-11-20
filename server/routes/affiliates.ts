@@ -90,7 +90,7 @@ affiliatesRouter.post('/submit-lead', async (req: AuthenticatedRequest, res: Res
       referralCode: affiliate.referralCode,
       clientIdentifier: clientIdentifier.trim(),
       clientType: resolvedClientType,
-      region: typeof region === 'string' && region.trim() ? region.trim() : 'United States',
+      region: typeof region === 'string' && region.trim() ? region.trim() : 'International',
       serviceCategory: serviceCategory.trim(),
       estimatedValue: parsedEstimatedValue,
       notes: typeof notes === 'string' && notes.trim() ? notes.trim() : undefined

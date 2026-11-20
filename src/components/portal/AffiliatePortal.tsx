@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react';
+import { COUNTRIES, formatInternationalDate, formatCurrencyAmount } from '../../lib/international';
 
 interface AffiliatePortalProps {
   onClose: () => void;
@@ -41,6 +42,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
   const [leadNotes, setLeadNotes] = useState('');
   const [leadSubmitting, setLeadSubmitting] = useState(false);
   const [leadSuccessMsg, setLeadSuccessMsg] = useState<string | null>(null);
+  const [leadErrorMsg, setLeadErrorMsg] = useState<string | null>(null);
 
   const fetchDashboard = async () => {
     setIsLoading(true);
@@ -73,15 +75,25 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
 
   const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!leadClient.trim()) return;
+    setLeadErrorMsg(null);
+    setLeadSuccessMsg(null);
+
+    if (!leadClient.trim()) {
+      setLeadErrorMsg('Please enter an anonymized client identifier or family office name.');
+      return;
+    }
+
+    if (!leadRegion.trim()) {
+      setLeadErrorMsg('Please select the client country or region.');
+      return;
+    }
 
     setLeadSubmitting(true);
-    setLeadSuccessMsg(null);
     try {
       const res = await api.submitAffiliateLead({
         clientIdentifier: leadClient.trim(),
         clientType: leadType,
-        region: leadRegion.trim() || 'United States',
+        region: leadRegion.trim(),
         serviceCategory: leadCategory,
         notes: leadNotes.trim() || undefined
       });
@@ -91,7 +103,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
       setLeadRegion('');
       fetchDashboard();
     } catch (err: any) {
-      alert(err.message || 'Error submitting lead');
+      setLeadErrorMsg(err.message || 'Error submitting lead.');
     } finally {
       setLeadSubmitting(false);
     }
@@ -248,9 +260,9 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                         Approved Commissions
                       </span>
                       <span className="font-mono text-2xl text-[#0A192F] font-semibold tabular-nums">
-                        ${data.stats.approvedCommissions.toLocaleString()}
+                        {formatCurrencyAmount(data.stats.approvedCommissions, 'USD')}
                       </span>
-                      <span className="block text-[10px] text-stone-400 mt-1">USD eligible balance</span>
+                      <span className="block text-[10px] text-stone-400 mt-1">USD eligible ledger balance</span>
                     </div>
 
                     <div className="p-4 bg-white border border-[#E2DDD3]">
@@ -258,9 +270,9 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                         Paid Settlements
                       </span>
                       <span className="font-mono text-2xl text-[#D4AF37] font-semibold tabular-nums">
-                        ${data.stats.paidCommissions.toLocaleString()}
+                        {formatCurrencyAmount(data.stats.paidCommissions, 'USD')}
                       </span>
-                      <span className="block text-[10px] text-stone-400 mt-1">Disbursed via wire</span>
+                      <span className="block text-[10px] text-stone-400 mt-1">Disbursed international / bank wire</span>
                     </div>
                   </div>
 
@@ -337,12 +349,12 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                               <div>
                                 <span className="font-mono text-[11px] text-[#0A192F] font-medium block">{com.commissionReference}</span>
                                 <span className="text-[11px] text-stone-500 font-light">
-                                  {com.appliedCommissionRate}% on ${com.eligibleTransactionAmount.toLocaleString()} USD
+                                  {com.appliedCommissionRate}% on {formatCurrencyAmount(com.eligibleTransactionAmount, com.currency || 'USD')}
                                 </span>
                               </div>
                               <div className="text-right">
                                 <span className="font-mono font-medium text-[#0A192F] block tabular-nums">
-                                  ${com.commissionAmount.toLocaleString()} USD
+                                  {formatCurrencyAmount(com.commissionAmount, com.currency || 'USD')}
                                 </span>
                                 <span className={`text-[10px] font-mono uppercase px-1.5 py-0.2 border ${
                                   com.status === 'paid'
@@ -501,7 +513,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                                 </span>
                               </td>
                               <td className="py-3.5 px-4 font-mono text-stone-500 text-[11px]">
-                                {new Date(lead.createdAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                {formatInternationalDate(lead.createdAt)}
                               </td>
                             </tr>
                           ))
@@ -551,7 +563,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                                 {conv.membershipTierOrCategory}
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-medium text-[#0A192F] tabular-nums">
-                                ${conv.eligibleSaleAmount.toLocaleString()} {conv.currency}
+                                {formatCurrencyAmount(conv.eligibleSaleAmount, conv.currency || 'USD')}
                               </td>
                               <td className="py-3.5 px-4">
                                 <span className={`font-mono text-[10px] uppercase px-2 py-0.5 border ${
@@ -563,7 +575,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                                 </span>
                               </td>
                               <td className="py-3.5 px-4 font-mono text-stone-500 text-[11px]">
-                                {new Date(conv.transactionDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                {formatInternationalDate(conv.transactionDate)}
                               </td>
                               <td className="py-3.5 px-4 text-stone-500 text-[11px]">
                                 {conv.verifiedBy || 'Pending Compliance Audit'}
@@ -583,7 +595,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                   <div>
                     <h3 className="font-serif text-2xl text-[#0A192F] font-normal">Commission Ledger</h3>
                     <p className="text-xs text-stone-600 font-light">
-                      Financial ledger detailing applied approved commission percentages, recorded amounts, and governance authorization.
+                      Financial ledger detailing applied approved commission percentages, recorded amounts in USD (ISO 4217), and governance authorization.
                     </p>
                   </div>
 
@@ -617,13 +629,13 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                                 {com.transactionReference}
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono text-stone-600 tabular-nums">
-                                ${com.eligibleTransactionAmount.toLocaleString()} USD
+                                {formatCurrencyAmount(com.eligibleTransactionAmount, com.currency || 'USD')}
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-medium text-[#0A192F] tabular-nums">
                                 {com.appliedCommissionRate.toFixed(2)}%
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold text-[#0A192F] tabular-nums">
-                                ${com.commissionAmount.toLocaleString()} {com.currency}
+                                {formatCurrencyAmount(com.commissionAmount, com.currency || 'USD')}
                               </td>
                               <td className="py-3.5 px-4">
                                 <span className={`font-mono text-[10px] uppercase px-2 py-0.5 border ${
@@ -637,7 +649,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                                 </span>
                               </td>
                               <td className="py-3.5 px-4 font-mono text-stone-500 text-[11px]">
-                                {new Date(com.dateRecorded).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                {formatInternationalDate(com.dateRecorded)}
                               </td>
                             </tr>
                           ))
@@ -654,7 +666,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                   <div>
                     <h3 className="font-serif text-2xl text-[#0A192F] font-normal">Disbursed Payout History</h3>
                     <p className="text-xs text-stone-600 font-light">
-                      Settlement cycles executed to your partner banking institution. Wire confirmation numbers are archived for tax accounting.
+                      Settlement cycles executed via SWIFT international wire or applicable local clearing rails. Ledger totals are denominated in USD (ISO 4217).
                     </p>
                   </div>
 
@@ -688,7 +700,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                                 {pay.payoutPeriod}
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold text-[#D4AF37] tabular-nums">
-                                ${pay.amount.toLocaleString()} {pay.currency}
+                                {formatCurrencyAmount(pay.amount, pay.currency || 'USD')}
                               </td>
                               <td className="py-3.5 px-4 text-stone-600">
                                 {pay.paymentMethod}
@@ -707,7 +719,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                               </td>
                               <td className="py-3.5 px-4 font-mono text-stone-500 text-[11px]">
                                 {pay.processedAt
-                                  ? new Date(pay.processedAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
+                                  ? formatInternationalDate(pay.processedAt)
                                   : 'Scheduled'}
                               </td>
                             </tr>
@@ -733,6 +745,16 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                       Introduce a prospective client directly under your affiliate attribution code ({data.affiliate.referralCode}).
                     </p>
 
+                    {leadErrorMsg && (
+                      <div className="mb-6 p-4 bg-red-50 border border-red-200 text-xs text-red-900 flex items-start gap-3">
+                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                        <div>
+                          <strong className="block font-medium">Validation Notice</strong>
+                          {leadErrorMsg}
+                        </div>
+                      </div>
+                    )}
+
                     {leadSuccessMsg && (
                       <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-3">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
@@ -752,13 +774,13 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                           type="text"
                           value={leadClient}
                           onChange={(e) => setLeadClient(e.target.value)}
-                          placeholder="e.g. Single Family Office (New York) or Principal M.V."
+                          placeholder="e.g. Family Office (Zurich) or Corporate Trust (Lagos)"
                           required
                           className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                         />
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
                             Client Type
@@ -776,15 +798,22 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
 
                         <div>
                           <label className="block text-[11px] uppercase tracking-wider text-stone-700 font-medium mb-1">
-                            Region / Jurisdiction
+                            Country / Jurisdiction <span className="text-red-500">*</span>
                           </label>
-                          <input
-                            type="text"
+                          <select
                             value={leadRegion}
                             onChange={(e) => setLeadRegion(e.target.value)}
-                            placeholder="e.g. New York / Delaware / California"
-                            className="w-full text-xs px-3.5 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
-                          />
+                            required
+                            className="w-full text-xs px-3 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
+                          >
+                            <option value="">Select country or region...</option>
+                            <option value="Multi-Region / Cross-Border">Multi-Region / Cross-Border</option>
+                            {COUNTRIES.map((c) => (
+                              <option key={c.code} value={c.name}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       </div>
 
@@ -798,8 +827,8 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
                           className="w-full text-xs px-3 py-2 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-white transition-colors"
                         >
                           <option value="Executive Contingency Retainer">Executive Contingency Retainer</option>
-                          <option value="Institutional Crisis Advisory">Institutional Crisis Advisory & Rapid Deployment</option>
-                          <option value="Private Sovereign Support">Private U.S. Principal &amp; Fiduciary Support</option>
+                          <option value="Institutional Crisis Advisory">Institutional Crisis Advisory &amp; Rapid Deployment</option>
+                          <option value="Private Client & Family Office Advisory">Private Client &amp; Family Office Advisory</option>
                         </select>
                       </div>
 
@@ -818,7 +847,7 @@ export const AffiliatePortal: React.FC<AffiliatePortalProps> = ({ onClose }) => 
 
                       <button
                         type="submit"
-                        disabled={leadSubmitting || !leadClient.trim()}
+                        disabled={leadSubmitting || !leadClient.trim() || !leadRegion.trim()}
                         className="w-full py-3 bg-[#0A192F] text-[#FAF9F6] text-xs uppercase tracking-widest font-medium hover:bg-[#112240] transition-colors disabled:opacity-50"
                       >
                         {leadSubmitting ? 'Registering...' : 'Register Introduction into Ledger'}

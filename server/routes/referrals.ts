@@ -9,6 +9,7 @@ import {
   getClientRegistrationByEmail,
   recordAuditLog
 } from '../supabase.js';
+import { validateInternationalPhone, isValidEmail } from '../utils/validation.js';
 
 export const referralsRouter = Router();
 
@@ -106,9 +107,14 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
   if (!clientName || typeof clientName !== 'string' || clientName.trim().length < 2) {
     validationErrors.clientName = 'Client or principal name is required (minimum 2 characters).';
   }
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!email || typeof email !== 'string' || !emailRegex.test(email.trim())) {
+  if (!email || typeof email !== 'string' || !isValidEmail(email)) {
     validationErrors.email = 'Valid business or personal email is required.';
+  }
+  if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
+    const phoneCheck = validateInternationalPhone(String(phone));
+    if (!phoneCheck.valid) {
+      validationErrors.phone = phoneCheck.error || 'Valid international telephone number is required.';
+    }
   }
   if (!serviceInterest || typeof serviceInterest !== 'string' || serviceInterest.trim().length < 2) {
     validationErrors.serviceInterest = 'Service interest category is required.';
@@ -123,7 +129,7 @@ referralsRouter.post(['/inquire', '/inquiry', '/lead'], async (req: Request, res
   }
 
   const normalizedCountry =
-    typeof country === 'string' && country.trim() ? country.trim() : 'United States';
+    typeof country === 'string' && country.trim() ? country.trim() : 'International';
   const normalizedOrganization =
     typeof organization === 'string' && organization.trim() ? organization.trim() : undefined;
 

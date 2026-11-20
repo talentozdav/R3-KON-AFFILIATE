@@ -6,6 +6,7 @@ import {
   recordAuditLog
 } from '../supabase.js';
 import { sendAffiliateRegistrationConfirmation } from '../services/mailer.js';
+import { validateInternationalPhone, isValidEmail } from '../utils/validation.js';
 
 export const applicationsRouter = Router();
 
@@ -61,17 +62,21 @@ applicationsRouter.post('/', async (req: Request, res: Response) => {
     errors.businessName = 'Registered business entity name is required for corporate applications.';
   }
 
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!email || typeof email !== 'string' || !emailRegex.test(email.trim())) {
+  if (!email || typeof email !== 'string' || !isValidEmail(email)) {
     errors.email = 'A valid corporate or professional email address is required.';
   }
 
-  if (!phone || typeof phone !== 'string' || phone.trim().length < 6) {
-    errors.phone = 'Valid U.S. direct phone number is required.';
+  if (!phone || typeof phone !== 'string') {
+    errors.phone = 'Valid international telephone number with country calling code is required.';
+  } else {
+    const phoneCheck = validateInternationalPhone(phone);
+    if (!phoneCheck.valid) {
+      errors.phone = phoneCheck.error || 'Valid international telephone number with country calling code is required.';
+    }
   }
 
   if (!country || typeof country !== 'string' || country.trim().length < 2) {
-    errors.country = 'U.S. state or jurisdiction of entity registration is required.';
+    errors.country = 'Country or primary jurisdiction of registration is required.';
   }
 
   if (!partnershipCategory || typeof partnershipCategory !== 'string') {

@@ -24,10 +24,10 @@ export const Footer: React.FC<FooterProps> = ({
               <BrandLogo variant="dark" size="md" />
             </div>
             <p className="text-xs text-stone-400 font-light leading-relaxed max-w-sm mb-6">
-              United States contingency coordination, corporate registration alignment, and executive advisory frameworks. The R3 Affiliate Network is restricted to verified U.S. and compliant professional partners.
+              International contingency coordination, client advisory alignment, and global business partnership frameworks for individuals, corporations, and family offices worldwide.
             </p>
             <div className="text-[11px] font-mono text-stone-500 tracking-wider">
-              REGISTRATION: 2026-R3-US · US FEDERAL &amp; DELAWARE COMPLIANT
+              R3 GLOBAL NETWORK · CROSS-BORDER COMPLIANCE ALIGNED
             </div>
           </div>
 
@@ -107,16 +107,16 @@ export const Footer: React.FC<FooterProps> = ({
                 onClick={onOpenInquiry}
                 className="w-full text-left py-2 px-3 border border-[#1A2E4C] hover:border-[#D4AF37] text-xs text-stone-300 hover:text-white transition-colors bg-[#060F1E]/60 flex items-center justify-between"
               >
-                <span>Introduce Client Inquiry</span>
+                <span>Register as Client / Submit Inquiry</span>
                 <span className="text-[#D4AF37] font-mono text-[11px]">→</span>
               </button>
             </div>
             <div className="mt-4 text-[11px] text-stone-400 leading-relaxed font-light space-y-1">
               <div>
-                Executive coordination: <a href="mailto:services@r3-konaffiliate.online" className="font-mono text-stone-300 hover:text-[#D4AF37] transition-colors underline underline-offset-2">services@r3-konaffiliate.online</a>
+                International Inquiries: <a href="mailto:services@r3-konaffiliate.online" className="font-mono text-stone-300 hover:text-[#D4AF37] transition-colors underline underline-offset-2">services@r3-konaffiliate.online</a>
               </div>
               <div>
-                Direct telephone inquiry: <a href="tel:+19313660615" className="font-mono text-stone-300 hover:text-[#D4AF37] transition-colors">+1(931)366-0615</a>
+                Telephone (International Direct): <a href="tel:+19313660615" className="font-mono text-stone-300 hover:text-[#D4AF37] transition-colors">+1(931)366-0615</a>
               </div>
             </div>
           </div>
@@ -128,9 +128,9 @@ export const Footer: React.FC<FooterProps> = ({
             © {new Date().getFullYear()} R3 Contingencies. All rights reserved.
           </div>
           <div className="flex items-center gap-6">
-            <span>Discreet Fiduciary Architecture</span>
+            <span>Discreet Global Fiduciary Architecture</span>
             <span>·</span>
-            <span>Zero Unverified Representations</span>
+            <span>Worldwide Client &amp; Partner Access</span>
           </div>
         </div>
       </div>

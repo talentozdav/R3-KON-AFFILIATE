@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api } from '../../lib/api';
 import { ApplicantType } from '../../types';
 import { CheckCircle2, AlertCircle, Copy, Check, ArrowRight } from 'lucide-react';
+import { COUNTRIES, getDialCodeForCountry, validateInternationalPhone } from '../../lib/international';
 
 interface ApplicationFormProps {
   onOpenTerms: () => void;
@@ -20,7 +21,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [country, setCountry] = useState('');
-  const [partnershipCategory, setPartnershipCategory] = useState('Wealth Advisory');
+  const [partnershipCategory, setPartnershipCategory] = useState('Wealth Advisory & Multi-Family Office');
   const [industryBackground, setIndustryBackground] = useState('');
   const [audienceDescription, setAudienceDescription] = useState('');
   const [partnershipObjectives, setPartnershipObjectives] = useState('');
@@ -39,10 +40,60 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
     'Corporate Risk & Fiduciary Practice',
     'Private Client Legal & Tax Advisory',
     'Executive Leadership & Board Consulting',
-    'U.S. Federal & Multi-State Regulatory Advisory',
+    'Cross-Border Regulatory & Compliance Advisory',
     'Boutique Financial Advisory',
     'Other Specialized Advisory'
   ];
+
+  const handleCountryChange = (selectedCountry: string) => {
+    const previousDial = country ? getDialCodeForCountry(country) : '';
+    setCountry(selectedCountry);
+
+    const nextDial = getDialCodeForCountry(selectedCountry);
+    if (!nextDial) return;
+
+    const trimmedPhone = phone.trim();
+    if (!trimmedPhone || trimmedPhone === previousDial) {
+      setPhone(`${nextDial} `);
+    }
+  };
+
+  const handlePhoneChange = (rawValue: string) => {
+    const isDeleting = rawValue.length < phone.length;
+    if (isDeleting) {
+      setPhone(rawValue);
+      return;
+    }
+
+    const trimmed = rawValue.trim();
+    if (trimmed.startsWith('+') && !trimmed.startsWith('+1')) {
+      setPhone(rawValue);
+      return;
+    }
+    if (country && country !== 'United States' && country !== 'Canada') {
+      setPhone(rawValue);
+      return;
+    }
+
+    let digits = rawValue.replace(/\D/g, '');
+    if (digits.startsWith('1')) {
+      digits = digits.slice(1);
+    }
+    digits = digits.slice(0, 10);
+
+    if (!digits) {
+      setPhone(trimmed.startsWith('+') ? '+1 ' : '');
+      return;
+    }
+
+    if (digits.length <= 3) {
+      setPhone(`+1 (${digits}`);
+    } else if (digits.length <= 6) {
+      setPhone(`+1 (${digits.slice(0, 3)}) ${digits.slice(3)}`);
+    } else {
+      setPhone(`+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`);
+    }
+  };
 
   const validateClientSide = () => {
     const errs: Record<string, string> = {};
@@ -52,7 +103,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
     }
 
     if (applicantType === 'Business' && (!businessName.trim() || businessName.trim().length < 2)) {
-      errs.businessName = 'Registered U.S. entity or LLC/corporate practice name is required.';
+      errs.businessName = 'Registered company or corporate practice name is required.';
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -60,12 +111,13 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
       errs.email = 'Valid corporate or professional email is required.';
     }
 
-    if (!phone.trim() || phone.trim().length < 6) {
-      errs.phone = 'Valid direct U.S. phone number is required.';
+    const phoneCheck = validateInternationalPhone(phone);
+    if (!phoneCheck.valid) {
+      errs.phone = phoneCheck.error || 'Valid international telephone number with country code is required.';
     }
 
     if (!country.trim() || country.trim().length < 2) {
-      errs.country = 'U.S. State / jurisdiction of registration is required.';
+      errs.country = 'Country or primary jurisdiction of registration is required.';
     }
 
     if (!industryBackground.trim() || industryBackground.trim().length < 20) {
@@ -321,13 +373,13 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
               {applicantType === 'Business' && (
                 <div>
                   <label className="block text-xs uppercase tracking-wider text-stone-700 font-medium mb-1.5">
-                    Registered U.S. Business Name <span className="text-red-500">*</span>
+                    Registered Business / Entity Name <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
                     value={businessName}
                     onChange={(e) => setBusinessName(e.target.value)}
-                    placeholder="e.g. Vance & Partners Advisory LLC"
+                    placeholder="e.g. Vance & Partners Advisory Ltd"
                     className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                   />
                   {fieldErrors.businessName && (
@@ -344,7 +396,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="alexander@vance-partners.com"
+                  placeholder="partner@advisory-firm.com"
                   className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.email && (
@@ -354,33 +406,38 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
 
               <div>
                 <label className="block text-xs uppercase tracking-wider text-stone-700 font-medium mb-1.5">
-                  Direct Phone Number <span className="text-red-500">*</span>
+                  Country / Jurisdiction of Registration <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+1 (212) 555-0192"
+                <select
+                  value={country}
+                  onChange={(e) => handleCountryChange(e.target.value)}
                   className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
-                />
-                {fieldErrors.phone && (
-                  <p className="mt-1 text-[11px] text-red-600">{fieldErrors.phone}</p>
+                >
+                  <option value="">Select country or jurisdiction...</option>
+                  {COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.name}>
+                      {c.name} ({c.dialCode})
+                    </option>
+                  ))}
+                </select>
+                {fieldErrors.country && (
+                  <p className="mt-1 text-[11px] text-red-600">{fieldErrors.country}</p>
                 )}
               </div>
 
               <div>
                 <label className="block text-xs uppercase tracking-wider text-stone-700 font-medium mb-1.5">
-                  U.S. State / Jurisdiction of Registration <span className="text-red-500">*</span>
+                  Direct Phone Number (with Country Code) <span className="text-red-500">*</span>
                 </label>
                 <input
-                  type="text"
-                  value={country}
-                  onChange={(e) => setCountry(e.target.value)}
-                  placeholder="e.g. Delaware / New York / California (USA)"
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => handlePhoneChange(e.target.value)}
+                  placeholder="+1 (212) 555-0192"
                   className="w-full text-xs px-3.5 py-2.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
-                {fieldErrors.country && (
-                  <p className="mt-1 text-[11px] text-red-600">{fieldErrors.country}</p>
+                {fieldErrors.phone && (
+                  <p className="mt-1 text-[11px] text-red-600">{fieldErrors.phone}</p>
                 )}
               </div>
 
@@ -412,7 +469,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   rows={3}
                   value={industryBackground}
                   onChange={(e) => setIndustryBackground(e.target.value)}
-                  placeholder="Summarize your U.S. professional experience, FINRA/SEC or state bar standing, corporate registrations, or advisory specialization..."
+                  placeholder="Summarize your professional experience, relevant regulatory standing, corporate registrations, or international advisory specialization..."
                   className="w-full text-xs p-3.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.industryBackground && (
@@ -428,7 +485,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   rows={3}
                   value={audienceDescription}
                   onChange={(e) => setAudienceDescription(e.target.value)}
-                  placeholder="Describe the nature of your U.S. client base (e.g. domestic UHNW principals, corporate risk officers, family offices, Delaware trusts)..."
+                  placeholder="Describe the geographic regions and profile of your client base (e.g. corporate directors, private principals, family offices, institutional entities)..."
                   className="w-full text-xs p-3.5 border border-stone-300 focus:outline-hidden focus:border-[#0A192F] bg-[#FAF9F6]/40 transition-colors"
                 />
                 {fieldErrors.audienceDescription && (
@@ -513,7 +570,7 @@ export const ApplicationForm: React.FC<ApplicationFormProps> = ({
                   >
                     R3 Privacy & Due Diligence Notice
                   </button>
-                  , authorizing R3 Contingencies to conduct U.S. KYC, OFAC sanctions, entity registration, and institutional compliance checks.
+                  , authorizing R3 Contingencies to conduct international KYC, anti-money laundering (AML), entity registration, and institutional compliance verification checks.
                 </span>
               </label>
               {fieldErrors.privacyAccepted && (
