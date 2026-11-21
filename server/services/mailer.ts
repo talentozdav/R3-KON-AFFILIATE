@@ -367,3 +367,245 @@ export async function sendAdministrativeNotification(params: {
     html
   });
 }
+
+function escapeHtml(value: string): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Event 9: Post-Approval Client Identity Verification Invitation
+ */
+export async function sendClientKycInvitation(params: {
+  email: string;
+  fullName: string;
+  referenceNumber: string;
+  verificationUrl: string;
+  requiresActivation?: boolean;
+}): Promise<SendEmailResult> {
+  const safeName = escapeHtml(params.fullName);
+  const safeRef = escapeHtml(params.referenceNumber);
+  const safeUrl = escapeHtml(params.verificationUrl);
+  const actionLabel = params.requiresActivation
+    ? 'Activate Account & Start Verification'
+    : 'Sign In to Verification Portal';
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">
+      <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #E2DDD3; padding: 36px;">
+        <div style="border-bottom: 2px solid #0A192F; padding-bottom: 16px; margin-bottom: 24px;">
+          <h2 style="font-family: Georgia, serif; color: #0A192F; margin: 0; font-size: 24px; letter-spacing: 0.5px;">R3 CONTINGENCIES</h2>
+          <span style="font-size: 11px; color: #D4AF37; text-transform: uppercase; letter-spacing: 2px; font-weight: 600;">Client Compliance &amp; Identity Verification</span>
+        </div>
+
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Dear ${safeName},
+        </p>
+
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Your client registration under dossier reference <strong style="font-family: monospace; color: #0A192F;">${safeRef}</strong> has been reviewed and approved for onboarding progression.
+        </p>
+
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Before full verified client privileges can be granted, you are required to complete Identity Verification (KYC) inside the authenticated R3 Client Portal. Your registration approval and identity verification clearance are maintained separately for regulatory compliance.
+        </p>
+
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${safeUrl}" style="background-color: #0A192F; color: #FAF9F6; padding: 14px 28px; text-decoration: none; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; display: inline-block; border: 1px solid #1A2E4C;">
+            ${actionLabel}
+          </a>
+        </div>
+
+        <p style="font-size: 12px; line-height: 1.5; color: #718096;">
+          Please never send identity documents or tax identifiers by email. Submit all verification materials strictly through the authenticated portal:<br/>
+          <span style="font-family: monospace; word-break: break-all; color: #4A5568;">${safeUrl}</span>
+        </p>
+
+        <div style="border-top: 1px solid #E2DDD3; margin-top: 32px; padding-top: 20px; font-size: 11px; color: #718096; line-height: 1.5;">
+          <p style="margin: 0;">R3 Contingencies Compliance Secretariat · Global Client Governance</p>
+          <p style="margin: 4px 0 0 0;">Confidential Inquiries: services@r3-konaffiliate.online | +1(931)366-0615</p>
+        </div>
+      </div>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: params.email,
+    subject: `R3 Contingencies — Action Required: Identity Verification Invitation [${params.referenceNumber}]`,
+    html
+  });
+}
+
+/**
+ * Event 10: Identity Verification Submission Confirmation
+ */
+export async function sendClientKycSubmissionConfirmation(params: {
+  email: string;
+  fullName: string;
+  referenceNumber: string;
+  submittedAt: string;
+}): Promise<SendEmailResult> {
+  const safeName = escapeHtml(params.fullName);
+  const safeRef = escapeHtml(params.referenceNumber);
+  const safeDate = escapeHtml(new Date(params.submittedAt).toUTCString());
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">
+      <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #E2DDD3; padding: 36px;">
+        <h2 style="font-family: Georgia, serif; color: #0A192F; margin: 0 0 12px 0;">Identity Verification Received</h2>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Dear ${safeName},
+        </p>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Your identity verification submission for dossier <strong style="font-family: monospace;">${safeRef}</strong> has been received on ${safeDate} and placed <strong>Under Review</strong> by the R3 Compliance Desk.
+        </p>
+        <p style="font-size: 13px; line-height: 1.6; color: #4A5568;">
+          You will receive an email notification as soon as a compliance officer completes the review or if any clarification is required.
+        </p>
+        <p style="font-size: 11px; color: #718096; margin-top: 28px;">
+          R3 Contingencies Compliance Secretariat · services@r3-konaffiliate.online
+        </p>
+      </div>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: params.email,
+    subject: `R3 Contingencies — Identity Verification Under Review [${params.referenceNumber}]`,
+    html
+  });
+}
+
+/**
+ * Event 11: Identity Verification Additional Information Requested (Action Required)
+ */
+export async function sendClientKycActionRequired(params: {
+  email: string;
+  fullName: string;
+  referenceNumber: string;
+  instructions: string;
+  verificationUrl: string;
+}): Promise<SendEmailResult> {
+  const safeName = escapeHtml(params.fullName);
+  const safeRef = escapeHtml(params.referenceNumber);
+  const safeInstructions = escapeHtml(params.instructions);
+  const safeUrl = escapeHtml(params.verificationUrl);
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">
+      <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #E2DDD3; padding: 36px;">
+        <h2 style="font-family: Georgia, serif; color: #0A192F; margin: 0 0 12px 0;">Additional Verification Information Required</h2>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Dear ${safeName},
+        </p>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Following review of your identity verification submission for dossier <strong style="font-family: monospace;">${safeRef}</strong>, our compliance officer requires additional clarification or updated documentation:
+        </p>
+        <div style="background-color: #FFFBEB; border: 1px solid #FCD34D; padding: 16px; margin: 20px 0; font-size: 13px; color: #78350F; line-height: 1.5;">
+          ${safeInstructions}
+        </div>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${safeUrl}" style="background-color: #0A192F; color: #FAF9F6; padding: 12px 26px; text-decoration: none; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; font-weight: 600; display: inline-block;">
+            Update Verification Submission
+          </a>
+        </div>
+        <p style="font-size: 11px; color: #718096;">
+          R3 Contingencies Compliance Secretariat · services@r3-konaffiliate.online
+        </p>
+      </div>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: params.email,
+    subject: `R3 Contingencies — Additional Information Required for Verification [${params.referenceNumber}]`,
+    html
+  });
+}
+
+/**
+ * Event 12: Identity Verification Approved
+ */
+export async function sendClientKycApproved(params: {
+  email: string;
+  fullName: string;
+  referenceNumber: string;
+  portalUrl: string;
+}): Promise<SendEmailResult> {
+  const safeName = escapeHtml(params.fullName);
+  const safeRef = escapeHtml(params.referenceNumber);
+  const safeUrl = escapeHtml(params.portalUrl);
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">
+      <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #E2DDD3; padding: 36px;">
+        <h2 style="font-family: Georgia, serif; color: #0A192F; margin: 0 0 12px 0;">Identity Verification Approved</h2>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Dear ${safeName},
+        </p>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Your identity verification for dossier <strong style="font-family: monospace;">${safeRef}</strong> has been formally approved by the R3 Compliance Desk. Your Client Portal profile now reflects full verified status.
+        </p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${safeUrl}" style="background-color: #0A192F; color: #FAF9F6; padding: 12px 26px; text-decoration: none; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; font-weight: 600; display: inline-block;">
+            Open Client Portal
+          </a>
+        </div>
+        <p style="font-size: 11px; color: #718096;">
+          R3 Contingencies Compliance Secretariat · services@r3-konaffiliate.online
+        </p>
+      </div>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: params.email,
+    subject: `R3 Contingencies — Identity Verification Approved [${params.referenceNumber}]`,
+    html
+  });
+}
+
+/**
+ * Event 13: Identity Verification Rejected
+ */
+export async function sendClientKycRejected(params: {
+  email: string;
+  fullName: string;
+  referenceNumber: string;
+  reason: string;
+}): Promise<SendEmailResult> {
+  const safeName = escapeHtml(params.fullName);
+  const safeRef = escapeHtml(params.referenceNumber);
+  const safeReason = escapeHtml(params.reason);
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #FAF9F6; padding: 40px 20px; color: #0A192F;">
+      <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #E2DDD3; padding: 36px;">
+        <h2 style="font-family: Georgia, serif; color: #0A192F; margin: 0 0 12px 0;">Identity Verification Decision Notice</h2>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Dear ${safeName},
+        </p>
+        <p style="font-size: 14px; line-height: 1.6; color: #2D3748;">
+          Following compliance review of your identity verification submission for dossier <strong style="font-family: monospace;">${safeRef}</strong>, we are unable to approve the verification at this time.
+        </p>
+        <div style="background-color: #FEF2F2; border: 1px solid #FECACA; padding: 16px; margin: 20px 0; font-size: 13px; color: #7F1D1D; line-height: 1.5;">
+          Decision Notice: ${safeReason}
+        </div>
+        <p style="font-size: 12px; color: #4A5568; line-height: 1.6;">
+          For compliance review inquiries or data governance requests, contact <a href="mailto:services@r3-konaffiliate.online" style="color: #0A192F;">services@r3-konaffiliate.online</a>.
+        </p>
+      </div>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: params.email,
+    subject: `R3 Contingencies — Identity Verification Decision [${params.referenceNumber}]`,
+    html
+  });
+}
+

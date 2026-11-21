@@ -1947,6 +1947,25 @@ export async function getClientRegistrations(): Promise<ClientRegistrationRecord
   return memoryClientRegistrations;
 }
 
+export async function getClientRegistrationById(id: string): Promise<ClientRegistrationRecord | null> {
+  if (supabaseAdmin) {
+    const { data, error } = await supabaseAdmin
+      .from('client_registrations')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Database error looking up client registration by id: ${error.message}`);
+    }
+
+    return data ? mapClientRegistrationRow(data) : null;
+  }
+
+  assertSupabaseInProduction();
+  return memoryClientRegistrations.find(r => r.id === id) || null;
+}
+
 export async function getClientRegistrationByEmail(email: string): Promise<ClientRegistrationRecord | null> {
   const normalized = email.trim().toLowerCase();
   if (supabaseAdmin) {

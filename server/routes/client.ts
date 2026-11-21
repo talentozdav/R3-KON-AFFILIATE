@@ -23,6 +23,7 @@ import {
 } from '../services/mailer.js';
 import { AuthenticatedRequest, requireAuth, requireRoles } from '../middleware/auth.js';
 import { validateInternationalPhone, isValidEmail } from '../utils/validation.js';
+import { backfillKycUserId, getClientOwnKycState } from '../services/kyc.js';
 
 export const clientRouter = Router();
 
@@ -463,23 +464,25 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
         throw new Error(`Database error saving client profile: ${cpErr.message}`);
       }
 
-      // 3. Update registration status in client_registrations
+      // 3. Update activation tracking in client_registrations WITHOUT bypassing admin approval status
       const { error: regUpdErr } = await supabaseAdmin
         .from('client_registrations')
         .update({
           invitation_status: 'accepted',
           account_activated_at: new Date().toISOString(),
-          user_id: userId,
-          status: 'APPROVED'
+          user_id: userId
         })
         .eq('id', registration.id);
       if (regUpdErr) {
         throw new Error(`Database error updating registration activation status: ${regUpdErr.message}`);
       }
 
-      // 4. Link pre-activation client_inquiries row to new client_id so portal displays initial brief
+      // 4. Link pre-activation client_inquiries and any initialized KYC record to new client userId
       await backfillClientInquiryClientId(registration.id, userId).catch(err =>
         console.warn('[R3 Client Activate] Inquiry backfill notice:', err.message)
+      );
+      await backfillKycUserId(registration.id, userId).catch(err =>
+        console.warn('[R3 Client Activate] KYC user backfill notice:', err.message)
       );
 
       // 5. Send confirmation email safely
@@ -515,6 +518,7 @@ clientRouter.post('/activate', async (req: Request, res: Response) => {
     // Local in-memory fallback for development/test fixtures
     await updateClientRegistrationInvitation(registration.id, 'accepted');
     await backfillClientInquiryClientId(registration.id, registration.id);
+    await backfillKycUserId(registration.id, registration.id);
     res.json({
       success: true,
       message: 'Account activated successfully (development test mode).',
@@ -621,7 +625,10 @@ clientRouter.post('/login', async (req: Request, res: Response) => {
 clientRouter.get('/me', requireAuth, requireRoles('client', 'super_admin'), async (req: AuthenticatedRequest, res: Response) => {
   const user = req.user!;
   try {
-    const inquiries = await getClientInquiries(user.id);
+    const [inquiries, kycState] = await Promise.all([
+      getClientInquiries(user.id),
+      getClientOwnKycState(user).catch(() => null)
+    ]);
 
     res.json({
       authenticated: true,
@@ -631,6 +638,8 @@ clientRouter.get('/me', requireAuth, requireRoles('client', 'super_admin'), asyn
         fullName: user.fullName,
         role: 'client',
         membershipTier: user.membershipTier || 'Executive Contingency Retainer',
+        registrationStatus: kycState?.registrationStatus || 'PENDING',
+        verificationStatus: kycState?.verificationStatus || 'not_started',
         inquiries
       }
     });

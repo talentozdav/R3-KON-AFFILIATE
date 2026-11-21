@@ -20,15 +20,47 @@ import {
 } from 'lucide-react';
 import { BrandLogo } from '../common/BrandLogo';
 import { formatInternationalDate } from '../../lib/international';
+import { ClientKycStateResponse, KycStatus } from '../../types';
+import { ClientKycVerification } from './ClientKycVerification';
 
 interface ClientPortalProps {
   onClose: () => void;
+  initialTab?: 'overview' | 'inquiries' | 'new_inquiry' | 'identity_verification' | 'security';
 }
 
-export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
+function getKycTabBadgeText(status?: KycStatus): string {
+  switch (status) {
+    case 'approved':
+      return 'Verified';
+    case 'under_review':
+    case 'submitted':
+      return 'Under Review';
+    case 'action_required':
+      return 'Action Needed';
+    case 'rejected':
+      return 'Rejected';
+    default:
+      return 'Pending';
+  }
+}
+
+export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose, initialTab }) => {
   const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'inquiries' | 'new_inquiry' | 'security'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'inquiries' | 'new_inquiry' | 'identity_verification' | 'security'>(() => {
+    if (initialTab) return initialTab;
+    try {
+      const target = sessionStorage.getItem('r3_portal_target_tab');
+      if (target === 'identity_verification') {
+        sessionStorage.removeItem('r3_portal_target_tab');
+        return 'identity_verification';
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return 'overview';
+  });
   const [inquiries, setInquiries] = useState<any[]>([]);
+  const [kycState, setKycState] = useState<ClientKycStateResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -39,12 +71,29 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
+  const loadKycStatus = async () => {
+    try {
+      const state = await api.getClientKycStatus();
+      setKycState(state);
+    } catch (err: any) {
+      console.warn('[Client Portal] KYC status notice:', err.message);
+    }
+  };
+
   const fetchClientData = async () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const res = await api.getClientInquiries();
-      setInquiries(res.inquiries || []);
+      const [inqRes, kycRes] = await Promise.allSettled([
+        api.getClientInquiries(),
+        api.getClientKycStatus()
+      ]);
+      if (inqRes.status === 'fulfilled') {
+        setInquiries(inqRes.value.inquiries || []);
+      }
+      if (kycRes.status === 'fulfilled') {
+        setKycState(kycRes.value);
+      }
     } catch (err: any) {
       console.warn('[Client Portal] Inquiries fetch notice:', err.message);
     } finally {
@@ -166,6 +215,31 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
             + Transmit Direct Brief
           </button>
           <button
+            onClick={() => setActiveTab('identity_verification')}
+            className={`py-4 border-b-2 transition-colors whitespace-nowrap cursor-pointer inline-flex items-center gap-2 ${
+              activeTab === 'identity_verification'
+                ? 'border-[#0A192F] text-[#0A192F]'
+                : 'border-transparent text-stone-500 hover:text-stone-800'
+            }`}
+          >
+            <span>Identity Verification</span>
+            {kycState && (
+              <span
+                className={`font-mono text-[9px] uppercase px-1.5 py-0.5 border ${
+                  kycState.verificationStatus === 'approved'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : kycState.verificationStatus === 'action_required'
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : kycState.verificationStatus === 'rejected'
+                    ? 'bg-red-50 text-red-800 border-red-200'
+                    : 'bg-stone-100 text-stone-700 border-stone-200'
+                }`}
+              >
+                {getKycTabBadgeText(kycState.verificationStatus)}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setActiveTab('security')}
             className={`py-4 border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
               activeTab === 'security'
@@ -189,6 +263,32 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
           {/* TAB 1: OVERVIEW */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
+              {/* KYC Action Callout */}
+              {kycState && kycState.registrationApproved && kycState.verificationStatus !== 'approved' && (
+                <div className="p-4 bg-[#0A192F] text-[#FAF9F6] border border-[#1A2E4C] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="text-xs">
+                    <span className="font-mono text-[10px] uppercase tracking-widest text-[#D4AF37] block mb-0.5">
+                      Identity Verification Required
+                    </span>
+                    <span className="font-light text-stone-200">
+                      {kycState.verificationStatus === 'action_required'
+                        ? 'R3 Compliance has requested additional verification details.'
+                        : kycState.verificationStatus === 'under_review' || kycState.verificationStatus === 'submitted'
+                        ? 'Your identity verification dossier is currently under compliance review.'
+                        : kycState.verificationStatus === 'rejected'
+                        ? 'Identity verification was not approved. Open the Identity Verification dossier for details.'
+                        : 'Your registration is approved. Please complete identity verification (KYC) to unlock full compliance clearance.'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('identity_verification')}
+                    className="px-4 py-2 bg-[#D4AF37] hover:bg-[#c29e2f] text-[#0A192F] text-[11px] font-semibold uppercase tracking-wider shrink-0 cursor-pointer"
+                  >
+                    Open Verification Portal
+                  </button>
+                </div>
+              )}
+
               {/* Membership Status Card */}
               <div className="bg-white border border-[#E2DDD3] p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
@@ -205,12 +305,21 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
                     Active international coordination protocol. Priority access to dedicated crisis response units, cross-border asset protection counsel, corporate continuity planning, and executive deployment.
                   </p>
                 </div>
-                <div className="bg-stone-50 border border-stone-200 p-4 text-right shrink-0">
+                <div className="bg-stone-50 border border-stone-200 p-4 text-right shrink-0 space-y-1">
                   <span className="text-[10px] text-stone-500 uppercase font-mono block">Dossier ID</span>
-                  <span className="font-mono text-sm font-semibold text-[#0A192F]">{user?.id?.slice(0, 13) || 'R3-CLT-ACTIVE'}</span>
-                  <span className="block mt-1 text-[11px] text-emerald-700 font-medium flex items-center justify-end gap-1">
+                  <span className="font-mono text-sm font-semibold text-[#0A192F] block">
+                    {kycState?.registrationReference || user?.id?.slice(0, 13) || 'R3-CLT-ACTIVE'}
+                  </span>
+                  <span className="block text-[11px] font-mono text-stone-700">
+                    Registration: <strong>{kycState?.registrationStatus || 'PENDING'}</strong>
+                  </span>
+                  <span
+                    className={`block text-[11px] font-medium flex items-center justify-end gap-1 ${
+                      kycState?.verificationStatus === 'approved' ? 'text-emerald-700' : 'text-amber-700'
+                    }`}
+                  >
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Verified Fiduciary Account</span>
+                    <span>KYC: {getKycTabBadgeText(kycState?.verificationStatus)}</span>
                   </span>
                 </div>
               </div>
@@ -459,7 +568,16 @@ export const ClientPortal: React.FC<ClientPortalProps> = ({ onClose }) => {
             </div>
           )}
 
-          {/* TAB 4: SECURITY & COMPLIANCE */}
+          {/* TAB 4: IDENTITY VERIFICATION (KYC) */}
+          {activeTab === 'identity_verification' && (
+            <ClientKycVerification
+              kycState={kycState}
+              onStateChange={(next) => setKycState(next)}
+              onReload={loadKycStatus}
+            />
+          )}
+
+          {/* TAB 5: SECURITY & COMPLIANCE */}
           {activeTab === 'security' && (
             <div className="space-y-6">
               <div className="bg-white border border-[#E2DDD3] p-6 space-y-4">

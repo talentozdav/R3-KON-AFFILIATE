@@ -4,6 +4,7 @@ import { AuthenticatedRequest, requireRoles } from '../middleware/auth.js';
 import { ApplicationStatus, AffiliateStatus } from '../types.js';
 import {
   getClientRegistrations,
+  getClientRegistrationById,
   updateClientRegistrationStatus,
   updateClientRegistrationInvitation,
   getClientInquiries,
@@ -44,6 +45,7 @@ import {
   createClientActivationToken
 } from '../supabase.js';
 import { sendClientAccountInvitation, sendAffiliateApprovalActivation } from '../services/mailer.js';
+import { triggerPostApprovalKycWorkflow } from '../services/kyc.js';
 
 export const adminRouter = Router();
 
@@ -111,7 +113,7 @@ adminRouter.post('/login', async (req: Request, res: Response) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const validAdminRoles = ['super_admin', 'affiliate_manager', 'finance_manager'];
+  const validAdminRoles = ['super_admin', 'affiliate_manager', 'finance_manager', 'compliance_officer'];
 
   // 1. Supabase Auth check (required whenever Supabase is configured or in production)
   if (supabaseAdmin) {
@@ -248,7 +250,7 @@ adminRouter.get('/verify-session', (req: AuthenticatedRequest, res: Response) =>
     return res.status(401).json({ authenticated: false, message: 'No active session.' });
   }
 
-  const validAdminRoles = ['super_admin', 'affiliate_manager', 'finance_manager'];
+  const validAdminRoles = ['super_admin', 'affiliate_manager', 'finance_manager', 'compliance_officer'];
   if (!validAdminRoles.includes(req.user.role)) {
     return res.status(403).json({
       authenticated: false,
@@ -266,7 +268,7 @@ adminRouter.get('/verify-session', (req: AuthenticatedRequest, res: Response) =>
 // PROTECTED ADMINISTRATIVE ACCESS
 // ==============================================================================
 
-adminRouter.use(requireRoles('super_admin', 'affiliate_manager', 'finance_manager'));
+adminRouter.use(requireRoles('super_admin', 'affiliate_manager', 'finance_manager', 'compliance_officer'));
 
 // 1. Program Overview Metrics
 adminRouter.get('/overview', async (_req: AuthenticatedRequest, res: Response) => {
@@ -299,8 +301,8 @@ adminRouter.get('/client-inquiries', requireRoles('super_admin', 'affiliate_mana
   }
 });
 
-// Update client registration status
-adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin', 'affiliate_manager'), async (req: AuthenticatedRequest, res: Response) => {
+// Update client registration status (Approval triggers KYC verification invitation)
+adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin', 'affiliate_manager', 'compliance_officer'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const { status } = req.body;
 
@@ -310,6 +312,11 @@ adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin',
   }
 
   try {
+    const existingReg = await getClientRegistrationById(id);
+    if (!existingReg) {
+      return res.status(404).json({ error: 'Client registration record not found.' });
+    }
+
     await updateClientRegistrationStatus(id, status);
     await recordAuditLog(
       req.user!.email,
@@ -320,7 +327,35 @@ adminRouter.post('/client-registrations/:id/status', requireRoles('super_admin',
       `Client registration ${id} status updated to ${status}`,
       req.ip
     );
-    res.json({ success: true, message: `Registration status updated to ${status}.` });
+
+    let kycVerification: {
+      verificationId: string;
+      verificationStatus: string;
+      invitationSent: boolean;
+    } | undefined;
+
+    if (status === 'APPROVED') {
+      const kycResult = await triggerPostApprovalKycWorkflow({
+        registration: { ...existingReg, status: 'APPROVED' },
+        actor: { id: req.user!.id, email: req.user!.email, role: req.user!.role },
+        reqHeaders: req.headers,
+        ipAddress: req.ip
+      });
+      kycVerification = {
+        verificationId: kycResult.verificationId,
+        verificationStatus: kycResult.verificationStatus,
+        invitationSent: kycResult.emailSent
+      };
+    }
+
+    res.json({
+      success: true,
+      message:
+        status === 'APPROVED'
+          ? `Registration status updated to APPROVED. Identity verification invitation ${kycVerification?.invitationSent ? 'dispatched' : 'queued'}.`
+          : `Registration status updated to ${status}.`,
+      kycVerification
+    });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update registration status', message: err.message });
   }
@@ -457,7 +492,7 @@ adminRouter.post('/client-followups', requireRoles('super_admin', 'affiliate_man
 });
 
 // 3. Applications Management
-adminRouter.get('/applications', async (_req: AuthenticatedRequest, res: Response) => {
+adminRouter.get('/applications', requireRoles('super_admin', 'affiliate_manager', 'finance_manager'), async (_req: AuthenticatedRequest, res: Response) => {
   try {
     const applications = await getAffiliateApplications();
     res.json({ applications });

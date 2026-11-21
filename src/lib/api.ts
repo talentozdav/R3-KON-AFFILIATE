@@ -10,7 +10,11 @@ import {
   Payout,
   AuditLogEntry,
   ReferralLead,
-  ClientInquiry
+  ClientInquiry,
+  KycDocumentType,
+  ClientKycStateResponse,
+  ComplianceKycOverview,
+  ComplianceKycSubmission
 } from '../types';
 
 let currentAuthToken: string | null = localStorage.getItem('r3_auth_token');
@@ -441,6 +445,192 @@ export const api = {
     return request('/api/admin/client-followups', {
       method: 'POST',
       body: JSON.stringify(data)
+    });
+  },
+
+  // Client Identity Verification (KYC) - Client Portal
+  async getClientKycStatus(): Promise<ClientKycStateResponse> {
+    return request('/api/kyc/status');
+  },
+
+  async saveClientKycDraft(data: {
+    legalFullName?: string;
+    country?: string;
+    addressLine1?: string;
+    addressLine2?: string;
+    city?: string;
+    stateProvince?: string;
+    postalCode?: string;
+    governmentIdType?: string;
+    governmentIdNumber?: string;
+    ssn?: string;
+    livenessMethod?: 'camera_capture' | 'selfie_upload';
+    livenessVerified?: boolean;
+    livenessChallengeNote?: string;
+    consentAccepted?: boolean;
+  }): Promise<ClientKycStateResponse> {
+    return request('/api/kyc/draft', {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  },
+
+  async requestKycUploadUrl(params: {
+    documentType: KycDocumentType;
+    filename: string;
+    mimeType: string;
+    fileSizeBytes: number;
+  }): Promise<{
+    success: boolean;
+    mode: 'signed_url' | 'direct_api';
+    verificationId: string;
+    storagePath?: string;
+    token?: string;
+    signedUrl?: string;
+    originalFilename?: string;
+  }> {
+    return request('/api/kyc/documents/upload-url', {
+      method: 'POST',
+      body: JSON.stringify(params)
+    });
+  },
+
+  async confirmKycDocumentUpload(params: {
+    documentType: KycDocumentType;
+    storagePath: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSizeBytes: number;
+  }): Promise<{ success: boolean; document: any }> {
+    return request('/api/kyc/documents/confirm', {
+      method: 'POST',
+      body: JSON.stringify(params)
+    });
+  },
+
+  async uploadKycDocumentDirect(params: {
+    documentType: KycDocumentType;
+    filename: string;
+    mimeType: string;
+    contentBase64: string;
+  }): Promise<{ success: boolean; document: any }> {
+    return request('/api/kyc/documents', {
+      method: 'POST',
+      body: JSON.stringify(params)
+    });
+  },
+
+  async uploadClientKycFile(documentType: KycDocumentType, file: File | Blob, customFilename?: string) {
+    const filename = customFilename || (file instanceof File ? file.name : `${documentType}.jpg`);
+    const mimeType = file.type || 'image/jpeg';
+
+    // Try signed upload URL first (bypasses serverless payload caps on production Supabase)
+    try {
+      const target = await this.requestKycUploadUrl({
+        documentType,
+        filename,
+        mimeType,
+        fileSizeBytes: file.size
+      });
+
+      if (target.mode === 'signed_url' && target.signedUrl && target.storagePath) {
+        const putRes = await fetch(target.signedUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': mimeType
+          },
+          body: file
+        });
+        if (putRes.ok) {
+          return this.confirmKycDocumentUpload({
+            documentType,
+            storagePath: target.storagePath,
+            originalFilename: target.originalFilename || filename,
+            mimeType,
+            fileSizeBytes: file.size
+          });
+        }
+      }
+    } catch {
+      // Fall through to validated direct API upload for local dev/test or fallback
+    }
+
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('Failed to read selected file.'));
+      reader.readAsDataURL(file);
+    });
+
+    return this.uploadKycDocumentDirect({
+      documentType,
+      filename,
+      mimeType,
+      contentBase64: base64
+    });
+  },
+
+  async submitClientKyc(data: {
+    legalFullName?: string;
+    country?: string;
+    addressLine1?: string;
+    addressLine2?: string;
+    city?: string;
+    stateProvince?: string;
+    postalCode?: string;
+    governmentIdType?: string;
+    governmentIdNumber?: string;
+    ssn?: string;
+    livenessMethod?: 'camera_capture' | 'selfie_upload';
+    livenessVerified?: boolean;
+    livenessChallengeNote?: string;
+    consentAccepted?: boolean;
+  }): Promise<ClientKycStateResponse> {
+    return request('/api/kyc/submit', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  },
+
+  // Client Identity Verification (KYC) - Compliance Officer & Super Admin
+  async getAdminKycSubmissions(): Promise<{
+    success: boolean;
+    overview: ComplianceKycOverview;
+    submissions: ComplianceKycSubmission[];
+  }> {
+    return request('/api/kyc/admin/submissions');
+  },
+
+  async getAdminKycSubmission(id: string): Promise<{
+    success: boolean;
+    submission: ComplianceKycSubmission;
+  }> {
+    return request(`/api/kyc/admin/submissions/${encodeURIComponent(id)}`);
+  },
+
+  async getAdminKycDocumentSignedUrl(docId: string): Promise<{
+    success: boolean;
+    signedUrl: string;
+    expiresInSeconds: number;
+    mimeType: string;
+    originalFilename: string;
+  }> {
+    return request(`/api/kyc/admin/documents/${encodeURIComponent(docId)}/signed-url`, {
+      method: 'POST'
+    });
+  },
+
+  async decideAdminKycSubmission(
+    id: string,
+    payload: {
+      decision: 'approve' | 'reject' | 'request_info';
+      clientMessage?: string;
+      internalNotes?: string;
+    }
+  ): Promise<{ success: boolean; message: string; submission: ComplianceKycSubmission }> {
+    return request(`/api/kyc/admin/submissions/${encodeURIComponent(id)}/decision`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     });
   }
 };

@@ -16,8 +16,11 @@ import {
   ClientRegistration,
   ClientInquiry,
   ClientNote,
-  ClientFollowup
+  ClientFollowup,
+  ComplianceKycOverview,
+  ComplianceKycSubmission
 } from '../../types';
+import { AdminKycCompliancePanel } from './AdminKycCompliancePanel';
 import {
   ShieldAlert,
   Users,
@@ -56,7 +59,11 @@ interface AdminPortalProps {
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'affiliates' | 'conversions' | 'commissions' | 'rules' | 'payouts' | 'audit' | 'client_crm'>('overview');
+  const canAccessKyc = user?.role === 'super_admin' || user?.role === 'compliance_officer';
+  const isComplianceOnly = user?.role === 'compliance_officer';
+  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'affiliates' | 'conversions' | 'commissions' | 'rules' | 'payouts' | 'audit' | 'client_crm' | 'kyc_compliance'>(
+    isComplianceOnly ? 'kyc_compliance' : 'overview'
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [metrics, setMetrics] = useState<AdminOverviewMetrics | null>(null);
 
@@ -71,6 +78,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
   const [payouts, setPayouts] = useState<Payout[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [clientRegistrations, setClientRegistrations] = useState<ClientRegistration[]>([]);
+  const [kycOverview, setKycOverview] = useState<ComplianceKycOverview | null>(null);
+  const [kycSubmissions, setKycSubmissions] = useState<ComplianceKycSubmission[]>([]);
 
   // Modals & Action States
   const [selectedApp, setSelectedApp] = useState<AffiliateApplication | null>(null);
@@ -133,26 +142,30 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
     setIsLoading(true);
     setAdminError(null);
     try {
+      const canAffiliateOps = user?.role === 'super_admin' || user?.role === 'affiliate_manager' || user?.role === 'finance_manager';
+      const canClientCrm = user?.role === 'super_admin' || user?.role === 'affiliate_manager';
+
       const settled = await Promise.allSettled([
         api.getAdminOverview(),
-        api.getAdminApplications(),
-        api.getAdminAffiliates(),
-        api.getAdminReferrals(),
-        api.getAdminConversions(),
-        api.getAdminCommissions(),
-        api.getAdminCommissionRules(),
-        api.getAdminPayouts(),
+        canAffiliateOps ? api.getAdminApplications() : Promise.resolve({ applications: [] }),
+        canAffiliateOps ? api.getAdminAffiliates() : Promise.resolve({ affiliates: [] }),
+        canAffiliateOps ? api.getAdminReferrals() : Promise.resolve({ leads: [], clicks: [] }),
+        canAffiliateOps ? api.getAdminConversions() : Promise.resolve({ conversions: [] }),
+        canAffiliateOps ? api.getAdminCommissions() : Promise.resolve({ commissions: [] }),
+        canAffiliateOps ? api.getAdminCommissionRules() : Promise.resolve({ rules: [] }),
+        canAffiliateOps ? api.getAdminPayouts() : Promise.resolve({ payouts: [] }),
         api.getAdminAuditLogs(),
-        api.getAdminClientRegistrations()
+        canClientCrm ? api.getAdminClientRegistrations() : Promise.resolve({ registrations: [] }),
+        canAccessKyc ? api.getAdminKycSubmissions() : Promise.resolve(null)
       ]);
 
-      const [m, apps, affs, refs, convs, comms, rls, pays, logs, clients] = settled;
+      const [m, apps, affs, refs, convs, comms, rls, pays, logs, clients, kycRes] = settled;
       const unexpectedErrors: string[] = [];
 
       const recordError = (label: string, res: PromiseSettledResult<any>) => {
         if (res.status === 'rejected') {
           const msg = res.reason?.message || 'Request failed';
-          if (!msg.toLowerCase().includes('not authorized')) {
+          if (!msg.toLowerCase().includes('not authorized') && !msg.toLowerCase().includes('insufficient permissions')) {
             unexpectedErrors.push(`${label}: ${msg}`);
           }
         }
@@ -168,6 +181,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
       recordError('Payouts', pays);
       recordError('Audit Logs', logs);
       recordError('Client CRM', clients);
+      recordError('KYC Compliance', kycRes);
 
       if (m.status === 'fulfilled') setMetrics(m.value.metrics);
       if (apps.status === 'fulfilled') setApplications(apps.value.applications || []);
@@ -182,6 +196,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
       if (pays.status === 'fulfilled') setPayouts(pays.value.payouts || []);
       if (logs.status === 'fulfilled') setAuditLogs(logs.value.auditLogs || []);
       if (clients.status === 'fulfilled') setClientRegistrations(clients.value.registrations || []);
+      if (kycRes.status === 'fulfilled' && kycRes.value) {
+        setKycOverview(kycRes.value.overview || null);
+        setKycSubmissions(kycRes.value.submissions || []);
+      }
 
       if (unexpectedErrors.length > 0) {
         setAdminError(unexpectedErrors.join(' | '));
@@ -518,14 +536,21 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
         {/* Tab Strip */}
         <div className="px-6 py-3 bg-white border-b border-[#E2DDD3] overflow-x-auto flex items-center gap-2 text-xs">
           {[
-            { id: 'overview', label: 'Program Overview' },
-            { id: 'applications', label: `Applications (${metrics?.pendingApplications ?? 0} Pending)` },
-            { id: 'affiliates', label: `Affiliates Directory (${affiliates.length})` },
-            { id: 'client_crm', label: `Client CRM (${clientRegistrations.length})` },
-            { id: 'conversions', label: `Conversions (${conversions.length})` },
-            { id: 'commissions', label: `Commission Ledger (${commissions.length})` },
-            { id: 'rules', label: `Commission Rules (${rules.length})` },
-            { id: 'payouts', label: `Payout Batches (${payouts.length})` },
+            ...(canAccessKyc
+              ? [{ id: 'kyc_compliance', label: `KYC Verification (${kycOverview?.pendingReview ?? 0} Review)` }]
+              : []),
+            ...(!isComplianceOnly
+              ? [
+                  { id: 'overview', label: 'Program Overview' },
+                  { id: 'applications', label: `Applications (${metrics?.pendingApplications ?? 0} Pending)` },
+                  { id: 'affiliates', label: `Affiliates Directory (${affiliates.length})` },
+                  { id: 'client_crm', label: `Client CRM (${clientRegistrations.length})` },
+                  { id: 'conversions', label: `Conversions (${conversions.length})` },
+                  { id: 'commissions', label: `Commission Ledger (${commissions.length})` },
+                  { id: 'rules', label: `Commission Rules (${rules.length})` },
+                  { id: 'payouts', label: `Payout Batches (${payouts.length})` }
+                ]
+              : [{ id: 'overview', label: 'Overview' }]),
             { id: 'audit', label: `Audit Log (${auditLogs.length})` }
           ].map((tab) => (
             <button
@@ -1413,11 +1438,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                                     : 'bg-stone-100 text-stone-600 border-stone-200'
                                 }`}
                               >
-                                {client.status.replace('_', ' ')}
+                                App: {client.status.replace('_', ' ')}
                               </span>
                               <span className="text-[10px] text-stone-500 flex items-center gap-1 font-mono">
                                 <MailCheck className="w-3 h-3 text-emerald-600" />
-                                {client.invitationStatus === 'sent' || client.invitationSentAt ? 'Invite Dispatched' : 'Pending Invite'}
+                                {client.status === 'APPROVED'
+                                  ? 'KYC Verification Invited'
+                                  : client.invitationStatus === 'sent' || client.invitationSentAt
+                                  ? 'Invite Dispatched'
+                                  : 'Pending Invite'}
                               </span>
                             </div>
                           </td>
@@ -1468,6 +1497,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onClose }) => {
                 </table>
               </div>
             </div>
+          )}
+
+          {/* TAB 10: KYC IDENTITY VERIFICATION COMPLIANCE (compliance_officer & super_admin ONLY) */}
+          {activeTab === 'kyc_compliance' && canAccessKyc && (
+            <AdminKycCompliancePanel
+              overview={kycOverview}
+              submissions={kycSubmissions}
+              onRefresh={fetchAllData}
+            />
           )}
         </div>
       </div>

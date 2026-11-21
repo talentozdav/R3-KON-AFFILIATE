@@ -1,4 +1,10 @@
-export type UserRole = 'super_admin' | 'affiliate_manager' | 'finance_manager' | 'affiliate' | 'client';
+export type UserRole =
+  | 'super_admin'
+  | 'compliance_officer'
+  | 'affiliate_manager'
+  | 'finance_manager'
+  | 'affiliate'
+  | 'client';
 
 export interface User {
   id: string;
@@ -246,4 +252,147 @@ export interface ClientFollowup {
   assignedTo: string;
   notes?: string;
   createdAt: string;
+}
+
+export type KycStatus =
+  | 'not_started'
+  | 'action_required'
+  | 'submitted'
+  | 'under_review'
+  | 'approved'
+  | 'rejected';
+
+export type GovernmentIdType = 'drivers_license' | 'state_id' | 'passport' | 'national_id';
+
+export type KycDocumentType =
+  | 'gov_id_front'
+  | 'gov_id_back'
+  | 'passport'
+  | 'national_id'
+  | 'selfie'
+  | 'liveness_capture'
+  | 'supplemental';
+
+export interface KycDocumentMetadata {
+  id: string;
+  verificationId: string;
+  registrationId: string;
+  documentType: KycDocumentType;
+  originalFilename: string;
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf';
+  fileSizeBytes: number;
+  sha256Checksum?: string;
+  uploadStatus: 'pending' | 'uploaded' | 'superseded' | 'deleted';
+  uploadedAt: string;
+}
+
+export interface KycReviewHistoryItem {
+  id: string;
+  verificationId?: string;
+  previousStatus?: string;
+  newStatus: string;
+  action: string;
+  actorEmail?: string;
+  actorRole?: string;
+  clientMessage?: string;
+  internalNotes?: string;
+  createdAt: string;
+}
+
+export interface ClientKycVerificationDetails {
+  id: string;
+  registrationId: string;
+  verificationStatus: KycStatus;
+  legalFullName: string;
+  verifiedEmail: string;
+  country: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  stateProvince: string;
+  postalCode: string;
+  governmentIdType: GovernmentIdType | '';
+  governmentIdLast4: string;
+  ssnProvided: boolean;
+  ssnMasked: string | null;
+  livenessMethod: 'camera_capture' | 'selfie_upload';
+  livenessVerified: boolean;
+  livenessChallengeNote: string;
+  consentAccepted: boolean;
+  consentVersion: string;
+  consentTimestamp: string | null;
+  retentionExpiresAt: string | null;
+  actionRequiredMessage: string | null;
+  rejectionReason: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  updatedAt: string;
+}
+
+export interface ClientKycStateResponse {
+  success?: boolean;
+  message?: string;
+  registrationId: string | null;
+  registrationReference: string | null;
+  registrationStatus: string;
+  registrationApproved: boolean;
+  verificationStatus: KycStatus;
+  canStartVerification: boolean;
+  isUnitedStates: boolean;
+  verification: ClientKycVerificationDetails | null;
+  documents: KycDocumentMetadata[];
+  history: KycReviewHistoryItem[];
+}
+
+export interface ComplianceKycOverview {
+  total: number;
+  notStarted: number;
+  pendingReview: number;
+  approved: number;
+  rejected: number;
+  actionRequired: number;
+}
+
+export interface ComplianceKycSubmission {
+  id: string;
+  registrationId: string;
+  registrationReference: string | null;
+  registrationStatus: string;
+  clientCompany: string | null;
+  serviceCategory: string | null;
+  userId: string | null;
+  verificationStatus: KycStatus;
+  legalFullName: string;
+  verifiedEmail: string;
+  country: string;
+  isUnitedStates: boolean;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  stateProvince: string;
+  postalCode: string;
+  governmentIdType: GovernmentIdType | null;
+  governmentIdLast4: string | null;
+  ssnProvided: boolean;
+  ssnMasked: string | null;
+  livenessMethod: 'camera_capture' | 'selfie_upload' | null;
+  livenessVerified: boolean;
+  livenessChallengeNote: string | null;
+  consentAccepted: boolean;
+  consentVersion: string | null;
+  consentTimestamp: string | null;
+  retentionExpiresAt: string | null;
+  kycInvitationSentAt: string | null;
+  kycInvitationExpiresAt: string | null;
+  actionRequiredMessage: string | null;
+  rejectionReason: string | null;
+  internalComplianceNotes: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedByEmail: string | null;
+  reviewedByRole: string | null;
+  createdAt: string;
+  updatedAt: string;
+  documents: KycDocumentMetadata[];
+  history: KycReviewHistoryItem[];
 }

@@ -53,11 +53,20 @@ function AppContent() {
         });
     }
 
-    // Direct /client-portal route or activation link handling
+    // Direct /client-portal route, activation link, or KYC verification deep link handling
     const isClientPortalPath = window.location.pathname === '/client-portal';
     const isActivation = params.get('mode') === 'activate' || params.get('action') === 'activate';
+    const isKycLink = params.get('section') === 'verification' || params.get('next') === 'verification';
 
-    if (isActivation || isClientPortalPath) {
+    if (isKycLink) {
+      try {
+        sessionStorage.setItem('r3_portal_target_tab', 'identity_verification');
+      } catch {
+        // ignore storage errors
+      }
+    }
+
+    if (isActivation || isClientPortalPath || isKycLink) {
       if (isAuthenticated) {
         setIsPortalOpen(true);
       } else {

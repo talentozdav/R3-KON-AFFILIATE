@@ -30,6 +30,7 @@ process.env.NODE_ENV = 'test';
 
 import http from 'http';
 import { app } from '../server.js';
+import { db as devDb, hashPassword } from '../server/db.js';
 import {
   extractProjectRef,
   resolveSupabaseConfig,
@@ -1780,6 +1781,543 @@ async function runSuite() {
       const formattedUsd = formatCurrencyAmount(12500, 'usd');
       if (formattedUsd !== 'USD 12,500') {
         throw new Error(`Expected "USD 12,500", got "${formattedUsd}"`);
+      }
+    });
+
+    // =========================================================================
+    // CLIENT IDENTITY VERIFICATION (KYC) MODULE TESTS (#43 - #51)
+    // =========================================================================
+
+    const VALID_PNG_BASE64 = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01
+    ]).toString('base64');
+
+    const VALID_JPEG_BASE64 = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01
+    ]).toString('base64');
+
+    let ukClientRegId = '';
+    let ukClientRef = '';
+    const ukClientEmail = `uk.kyc.${Date.now()}@london-chambers.co.uk`;
+    let ukClientAuthHeader: Record<string, string> = {};
+    let ukVerificationId = '';
+    let ukPassportDocId = '';
+
+    let usClientRegId = '';
+    let usClientRef = '';
+    const usClientEmail = `us.kyc.${Date.now()}@newyork-familyoffice.us`;
+    let usClientAuthHeader: Record<string, string> = {};
+    let usVerificationId = '';
+
+    let complianceAuthHeader: Record<string, string> = {};
+    let affMgrAuthHeader: Record<string, string> = {};
+    let finMgrAuthHeader: Record<string, string> = {};
+    let affiliateUserAuthHeader: Record<string, string> = {};
+
+    // Seed scoped dev accounts for strict KYC RBAC verification
+    const seedPassword = 'R3ScopedRole@2026!';
+    const seedHash = hashPassword(seedPassword);
+    devDb.users.push(
+      {
+        id: 'usr_compliance_officer_1',
+        email: 'compliance.officer@r3-konaffiliate.online',
+        fullName: 'Chief Compliance Officer',
+        role: 'compliance_officer',
+        status: 'active',
+        passwordHash: seedHash.hash,
+        passwordSalt: seedHash.salt,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'usr_affiliate_mgr_1',
+        email: 'aff.mgr@r3-konaffiliate.online',
+        fullName: 'Affiliate Operations Manager',
+        role: 'affiliate_manager',
+        status: 'active',
+        passwordHash: seedHash.hash,
+        passwordSalt: seedHash.salt,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'usr_finance_mgr_1',
+        email: 'fin.mgr@r3-konaffiliate.online',
+        fullName: 'Treasury Finance Manager',
+        role: 'finance_manager',
+        status: 'active',
+        passwordHash: seedHash.hash,
+        passwordSalt: seedHash.salt,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'usr_affiliate_kyc_check',
+        email: 'partner.rbac@contingency-partners.com',
+        fullName: 'Accredited Partner RBAC',
+        role: 'affiliate',
+        status: 'active',
+        affiliateId: activatedAffiliateId,
+        passwordHash: seedHash.hash,
+        passwordSalt: seedHash.salt,
+        createdAt: new Date().toISOString()
+      }
+    );
+
+    // 43. Approval-First Gate: unapproved clients stay blocked from KYC until admin approves registration
+    await runTest('43. Approval-first gate blocks KYC editing/upload/submit while client registration is PENDING', async () => {
+      const regRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: 'Arthur Pendelton',
+        email: ukClientEmail,
+        phone: '+44 20 7946 0821',
+        company: 'Mayfair Contingency Partners LLP',
+        country: 'United Kingdom',
+        serviceCategory: 'Executive Contingency Retainer',
+        requirementsBrief: 'London corporate continuity mandate.'
+      });
+      if (regRes.status !== 201) throw new Error(`Expected 201 on UK registration, got ${regRes.status}`);
+      ukClientRegId = regRes.body.registrationId;
+      ukClientRef = regRes.body.referenceNumber;
+
+      const token = createClientActivationToken({
+        registrationId: ukClientRegId,
+        referenceNumber: ukClientRef,
+        email: ukClientEmail
+      });
+      const actRes = await makeRequest(serverUrl, 'POST', '/api/client/activate', {
+        email: ukClientEmail,
+        referenceNumber: ukClientRef,
+        token,
+        password: 'UkClientPassword2026!'
+      });
+      if (actRes.status !== 200) throw new Error(`Expected 200 activating client, got ${actRes.status}`);
+      ukClientAuthHeader = { Authorization: `Bearer ${actRes.body.token}` };
+
+      // Self-activation must NOT approve registration!
+      const statusRes = await makeRequest(serverUrl, 'GET', '/api/kyc/status', null, ukClientAuthHeader);
+      if (statusRes.status !== 200) throw new Error(`Expected 200 on GET /api/kyc/status, got ${statusRes.status}`);
+      if (statusRes.body.registrationStatus !== 'PENDING' || statusRes.body.registrationApproved !== false) {
+        throw new Error(`Expected PENDING & registrationApproved=false after activation, got ${JSON.stringify(statusRes.body)}`);
+      }
+      if (statusRes.body.canStartVerification !== false) {
+        throw new Error('Expected canStartVerification === false for PENDING client');
+      }
+
+      // Blocked from saving KYC draft, uploading KYC doc, or submitting KYC while PENDING
+      const draftRes = await makeRequest(
+        serverUrl,
+        'PUT',
+        '/api/kyc/draft',
+        { addressLine1: '10 Downing Chambers' },
+        ukClientAuthHeader
+      );
+      if (draftRes.status !== 403) throw new Error(`Expected 403 on KYC draft when PENDING, got ${draftRes.status}`);
+
+      const uploadRes = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/kyc/documents',
+        {
+          documentType: 'passport',
+          filename: 'passport.png',
+          mimeType: 'image/png',
+          contentBase64: VALID_PNG_BASE64
+        },
+        ukClientAuthHeader
+      );
+      if (uploadRes.status !== 403) throw new Error(`Expected 403 on KYC upload when PENDING, got ${uploadRes.status}`);
+    });
+
+    // 44. Admin Approval Triggers Post-Approval KYC Workflow without Marking KYC Approved
+    await runTest('44. Approving client registration initializes KYC at not_started and triggers invitation cleanly', async () => {
+      const approveRes = await makeRequest(
+        serverUrl,
+        'POST',
+        `/api/admin/client-registrations/${encodeURIComponent(ukClientRegId)}/status`,
+        { status: 'APPROVED' },
+        adminAuthHeader
+      );
+      if (approveRes.status !== 200) throw new Error(`Expected 200 approving client, got ${approveRes.status}`);
+      if (!approveRes.body.kycVerification || approveRes.body.kycVerification.verificationStatus !== 'not_started') {
+        throw new Error(`Expected kycVerification initialized at not_started, got ${JSON.stringify(approveRes.body)}`);
+      }
+
+      const kycStatus = await makeRequest(serverUrl, 'GET', '/api/kyc/status', null, ukClientAuthHeader);
+      if (
+        kycStatus.status !== 200 ||
+        kycStatus.body.registrationStatus !== 'APPROVED' ||
+        kycStatus.body.registrationApproved !== true ||
+        kycStatus.body.verificationStatus !== 'not_started' ||
+        kycStatus.body.canStartVerification !== true
+      ) {
+        throw new Error(`Unexpected post-approval KYC status separation: ${JSON.stringify(kycStatus.body)}`);
+      }
+      ukVerificationId = kycStatus.body.verification?.id || '';
+      if (!ukVerificationId) throw new Error('Expected verification.id after registration approval');
+    });
+
+    // 45. Strict RBAC Isolation Across All Non-Compliance Roles
+    await runTest('45. Strict KYC RBAC blocks affiliate, affiliate_manager, finance_manager, client, and unauthenticated; grants compliance_officer', async () => {
+      // Log in scoped roles
+      const compLogin = await makeRequest(serverUrl, 'POST', '/api/admin/login', {
+        email: 'compliance.officer@r3-konaffiliate.online',
+        password: seedPassword
+      });
+      if (compLogin.status !== 200 || compLogin.body.user?.role !== 'compliance_officer') {
+        throw new Error(`Compliance officer login failed: ${compLogin.status}`);
+      }
+      complianceAuthHeader = { Authorization: `Bearer ${compLogin.body.token}` };
+
+      const affMgrLogin = await makeRequest(serverUrl, 'POST', '/api/admin/login', {
+        email: 'aff.mgr@r3-konaffiliate.online',
+        password: seedPassword
+      });
+      affMgrAuthHeader = { Authorization: `Bearer ${affMgrLogin.body.token}` };
+
+      const finMgrLogin = await makeRequest(serverUrl, 'POST', '/api/admin/login', {
+        email: 'fin.mgr@r3-konaffiliate.online',
+        password: seedPassword
+      });
+      finMgrAuthHeader = { Authorization: `Bearer ${finMgrLogin.body.token}` };
+
+      const affUserLogin = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/auth/login',
+        { email: 'partner.rbac@contingency-partners.com', password: seedPassword },
+        { 'X-Forwarded-For': '10.88.0.10' }
+      );
+      affiliateUserAuthHeader = { Authorization: `Bearer ${affUserLogin.body.token}` };
+
+      // Unauthenticated -> 401
+      const unauth = await makeRequest(serverUrl, 'GET', '/api/kyc/admin/submissions');
+      if (unauth.status !== 401) throw new Error(`Expected 401 for unauth KYC admin, got ${unauth.status}`);
+
+      // Denied roles -> 403
+      for (const [label, hdr] of [
+        ['client', ukClientAuthHeader],
+        ['affiliate', affiliateUserAuthHeader],
+        ['affiliate_manager', affMgrAuthHeader],
+        ['finance_manager', finMgrAuthHeader]
+      ] as const) {
+        const denyRes = await makeRequest(serverUrl, 'GET', '/api/kyc/admin/submissions', null, hdr);
+        if (denyRes.status !== 403) {
+          throw new Error(`RBAC VIOLATION: role '${label}' accessed /api/kyc/admin/submissions with ${denyRes.status}`);
+        }
+      }
+
+      // Compliance officer -> 200 on KYC routes, 403 on affiliate applications queue (least privilege)
+      const allowRes = await makeRequest(serverUrl, 'GET', '/api/kyc/admin/submissions', null, complianceAuthHeader);
+      if (allowRes.status !== 200) {
+        throw new Error(`Expected 200 for compliance_officer on KYC list, got ${allowRes.status}`);
+      }
+      const deniedAffQueue = await makeRequest(serverUrl, 'GET', '/api/admin/applications', null, complianceAuthHeader);
+      if (deniedAffQueue.status !== 403) {
+        throw new Error(`Expected 403 for compliance_officer on affiliate applications queue, got ${deniedAffQueue.status}`);
+      }
+    });
+
+    // 46. Malformed / Spoofed Document Rejection (Magic-Byte Verification)
+    await runTest('46. KYC document upload rejects spoofed MIME content and invalid magic bytes with 400 Bad Request', async () => {
+      const spoofedPayload = Buffer.from('<script>alert(1)</script>').toString('base64');
+      const badRes = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/kyc/documents',
+        {
+          documentType: 'passport',
+          filename: 'malicious.jpg',
+          mimeType: 'image/jpeg',
+          contentBase64: spoofedPayload
+        },
+        ukClientAuthHeader
+      );
+      if (badRes.status !== 400) {
+        throw new Error(`Expected 400 rejecting spoofed JPEG content, got ${badRes.status}`);
+      }
+    });
+
+    // 47. International Non-US KYC Flow (No SSN required)
+    await runTest('47. Non-US client completes KYC with passport & selfie and ZERO SSN -> transitions to under_review', async () => {
+      const ssnReject = await makeRequest(
+        serverUrl,
+        'PUT',
+        '/api/kyc/draft',
+        { country: 'United Kingdom', ssn: '123-45-6789' },
+        ukClientAuthHeader
+      );
+      if (ssnReject.status !== 400) {
+        throw new Error(`Expected 400 blocking SSN entry for non-US client, got ${ssnReject.status}`);
+      }
+
+      const passUpload = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/kyc/documents',
+        {
+          documentType: 'passport',
+          filename: 'uk-passport.png',
+          mimeType: 'image/png',
+          contentBase64: VALID_PNG_BASE64
+        },
+        ukClientAuthHeader
+      );
+      if (passUpload.status !== 201) throw new Error(`Expected 201 for passport upload, got ${passUpload.status}`);
+      ukPassportDocId = passUpload.body.document.id;
+
+      const selfieUpload = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/kyc/documents',
+        {
+          documentType: 'selfie',
+          filename: 'selfie.jpg',
+          mimeType: 'image/jpeg',
+          contentBase64: VALID_JPEG_BASE64
+        },
+        ukClientAuthHeader
+      );
+      if (selfieUpload.status !== 201) throw new Error(`Expected 201 for selfie upload, got ${selfieUpload.status}`);
+
+      const submitRes = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/kyc/submit',
+        {
+          legalFullName: 'Arthur Pendelton',
+          country: 'United Kingdom',
+          addressLine1: '14 Grosvenor Square',
+          city: 'London',
+          postalCode: 'W1K 6LP',
+          governmentIdType: 'passport',
+          governmentIdNumber: 'GBR99887766',
+          livenessMethod: 'selfie_upload',
+          consentAccepted: true
+        },
+        ukClientAuthHeader
+      );
+      if (submitRes.status !== 200 || submitRes.body.verificationStatus !== 'under_review') {
+        throw new Error(`Expected under_review after UK submit, got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+      }
+      if (submitRes.body.verification?.ssnProvided !== false) {
+        throw new Error('Expected ssnProvided=false for non-US client');
+      }
+    });
+
+    // 48. US Client KYC with AES-256-GCM SSN Encryption & Zero Plaintext Leakage
+    await runTest('48. US client submits KYC with encrypted SSN; raw SSN never leaks in client, admin, or audit payloads', async () => {
+      const regRes = await makeRequest(serverUrl, 'POST', '/api/client/register', {
+        fullName: 'Jonathan Mercer',
+        email: usClientEmail,
+        phone: '+1 (212) 555-0190',
+        company: 'Mercer Capital Advisors LLC',
+        country: 'United States',
+        serviceCategory: 'Executive Contingency Retainer'
+      });
+      if (regRes.status !== 201) throw new Error(`Expected 201 on US client register, got ${regRes.status}`);
+      usClientRegId = regRes.body.registrationId;
+      usClientRef = regRes.body.referenceNumber;
+
+      // Admin approves registration
+      const approveRes = await makeRequest(
+        serverUrl,
+        'POST',
+        `/api/admin/client-registrations/${encodeURIComponent(usClientRegId)}/status`,
+        { status: 'APPROVED' },
+        adminAuthHeader
+      );
+      if (approveRes.status !== 200) throw new Error(`Expected 200 approving US client, got ${approveRes.status}`);
+
+      const token = createClientActivationToken({
+        registrationId: usClientRegId,
+        referenceNumber: usClientRef,
+        email: usClientEmail
+      });
+      const actRes = await makeRequest(serverUrl, 'POST', '/api/client/activate', {
+        email: usClientEmail,
+        referenceNumber: usClientRef,
+        token,
+        password: 'UsClientPassword2026!'
+      });
+      if (actRes.status !== 200) throw new Error(`Expected 200 activating US client, got ${actRes.status}`);
+      usClientAuthHeader = { Authorization: `Bearer ${actRes.body.token}` };
+
+      // Upload US DL Front, Back, and Live Camera Capture
+      for (const [docType, filename, mime, data] of [
+        ['gov_id_front', 'ny-dl-front.png', 'image/png', VALID_PNG_BASE64],
+        ['gov_id_back', 'ny-dl-back.png', 'image/png', VALID_PNG_BASE64],
+        ['liveness_capture', 'camera-selfie.jpg', 'image/jpeg', VALID_JPEG_BASE64]
+      ] as const) {
+        const up = await makeRequest(
+          serverUrl,
+          'POST',
+          '/api/kyc/documents',
+          { documentType: docType, filename, mimeType: mime, contentBase64: data },
+          usClientAuthHeader
+        );
+        if (up.status !== 201) throw new Error(`Failed US upload ${docType}: ${up.status}`);
+      }
+
+      const rawSsn = '123-45-6789';
+      const rawSsnDigits = '123456789';
+      const usSubmit = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/kyc/submit',
+        {
+          legalFullName: 'Jonathan Mercer',
+          country: 'United States',
+          addressLine1: '350 Park Avenue',
+          city: 'New York',
+          stateProvince: 'NY',
+          postalCode: '10022',
+          governmentIdType: 'drivers_license',
+          governmentIdNumber: 'NYDL98765432',
+          ssn: rawSsn,
+          livenessMethod: 'camera_capture',
+          livenessVerified: true,
+          consentAccepted: true
+        },
+        usClientAuthHeader
+      );
+      if (usSubmit.status !== 200 || usSubmit.body.verificationStatus !== 'under_review') {
+        throw new Error(`US KYC submit failed: ${usSubmit.status}: ${JSON.stringify(usSubmit.body)}`);
+      }
+      usVerificationId = usSubmit.body.verification.id;
+      if (usSubmit.body.verification.ssnMasked !== '***-**-6789') {
+        throw new Error(`Expected masked SSN ***-**-6789, got ${usSubmit.body.verification.ssnMasked}`);
+      }
+
+      // Leak audit across client GET, compliance GET, and admin audit logs
+      const clientGet = await makeRequest(serverUrl, 'GET', '/api/kyc/status', null, usClientAuthHeader);
+      const complianceGet = await makeRequest(
+        serverUrl,
+        'GET',
+        `/api/kyc/admin/submissions/${encodeURIComponent(usVerificationId)}`,
+        null,
+        complianceAuthHeader
+      );
+      const auditGet = await makeRequest(serverUrl, 'GET', '/api/admin/audit-logs', null, adminAuthHeader);
+
+      const combined = JSON.stringify({ clientGet: clientGet.body, complianceGet: complianceGet.body, auditGet: auditGet.body });
+      if (combined.includes(rawSsn) || combined.includes(rawSsnDigits)) {
+        throw new Error('SECURITY VIOLATION: Raw 9-digit US SSN leaked in API or audit payload!');
+      }
+    });
+
+    // 49. Compliance Short-Lived Signed Document View URL & Tamper Rejection
+    await runTest('49. Compliance officer obtains 120s signed URL to view document and tampered signatures return 403', async () => {
+      const urlRes = await makeRequest(
+        serverUrl,
+        'POST',
+        `/api/kyc/admin/documents/${encodeURIComponent(ukPassportDocId)}/signed-url`,
+        {},
+        complianceAuthHeader
+      );
+      if (urlRes.status !== 200 || !urlRes.body.signedUrl || urlRes.body.expiresInSeconds !== 120) {
+        throw new Error(`Failed generating 120s signed URL: ${urlRes.status} ${JSON.stringify(urlRes.body)}`);
+      }
+
+      const previewRes = await makeRequest(serverUrl, 'GET', urlRes.body.signedUrl);
+      if (previewRes.status !== 200) {
+        throw new Error(`Expected 200 fetching signed document preview, got ${previewRes.status}`);
+      }
+
+      const tamperedUrl = urlRes.body.signedUrl.replace(/sig=[^&]+/, 'sig=TAMPERED_SIGNATURE_VALUE');
+      const tamperedRes = await makeRequest(serverUrl, 'GET', tamperedUrl);
+      if (tamperedRes.status !== 403) {
+        throw new Error(`Expected 403 on tampered signed preview URL, got ${tamperedRes.status}`);
+      }
+    });
+
+    // 50. Compliance Decision Lifecycle: Request Info -> Resubmit -> Approve & Reject (with Validation)
+    await runTest('50. Compliance officer validates reasons, requests info, approves UK dossier, and rejects US dossier', async () => {
+      // Missing reason on request_info / reject -> 400
+      const missingReason = await makeRequest(
+        serverUrl,
+        'POST',
+        `/api/kyc/admin/submissions/${encodeURIComponent(ukVerificationId)}/decision`,
+        { decision: 'reject', clientMessage: 'No' },
+        complianceAuthHeader
+      );
+      if (missingReason.status !== 400) {
+        throw new Error(`Expected 400 for missing/short rejection reason, got ${missingReason.status}`);
+      }
+
+      // Request additional information on UK dossier -> action_required
+      const reqInfoRes = await makeRequest(
+        serverUrl,
+        'POST',
+        `/api/kyc/admin/submissions/${encodeURIComponent(ukVerificationId)}/decision`,
+        {
+          decision: 'request_info',
+          clientMessage: 'Please upload a clearer utility bill or proof of residential address.',
+          internalNotes: 'Passport legible; verifying residential proof.'
+        },
+        complianceAuthHeader
+      );
+      if (reqInfoRes.status !== 200 || reqInfoRes.body.submission?.verificationStatus !== 'action_required') {
+        throw new Error(`Request info failed: ${reqInfoRes.status}`);
+      }
+
+      // UK Client uploads supplemental document and resubmits -> under_review
+      const suppUpload = await makeRequest(
+        serverUrl,
+        'POST',
+        '/api/kyc/documents',
+        {
+          documentType: 'supplemental',
+          filename: 'uk-proof-of-address.png',
+          mimeType: 'image/png',
+          contentBase64: VALID_PNG_BASE64
+        },
+        ukClientAuthHeader
+      );
+      if (suppUpload.status !== 201) throw new Error(`Supplemental upload failed: ${suppUpload.status}`);
+
+      const resubmitRes = await makeRequest(serverUrl, 'POST', '/api/kyc/submit', {}, ukClientAuthHeader);
+      if (resubmitRes.status !== 200 || resubmitRes.body.verificationStatus !== 'under_review') {
+        throw new Error(`Resubmit failed: ${resubmitRes.status}`);
+      }
+
+      // Compliance Officer approves UK dossier -> approved
+      const approveRes = await makeRequest(
+        serverUrl,
+        'POST',
+        `/api/kyc/admin/submissions/${encodeURIComponent(ukVerificationId)}/decision`,
+        {
+          decision: 'approve',
+          clientMessage: 'Identity verification and residential documentation verified.',
+          internalNotes: 'Cleared AML/PEP checks.'
+        },
+        complianceAuthHeader
+      );
+      if (approveRes.status !== 200 || approveRes.body.submission?.verificationStatus !== 'approved') {
+        throw new Error(`Approve failed: ${approveRes.status}`);
+      }
+
+      // Client sees approved status and internalComplianceNotes is NEVER leaked to client
+      const clientAfter = await makeRequest(serverUrl, 'GET', '/api/kyc/status', null, ukClientAuthHeader);
+      if (clientAfter.body.verificationStatus !== 'approved' || clientAfter.body.canStartVerification !== false) {
+        throw new Error('Expected approved status and locked post-approval editing on client side');
+      }
+      if (JSON.stringify(clientAfter.body).includes('Cleared AML/PEP checks')) {
+        throw new Error('PRIVACY VIOLATION: internalComplianceNotes leaked to client endpoint');
+      }
+
+      // Compliance Officer rejects US dossier with reason -> rejected
+      const rejectRes = await makeRequest(
+        serverUrl,
+        'POST',
+        `/api/kyc/admin/submissions/${encodeURIComponent(usVerificationId)}/decision`,
+        {
+          decision: 'reject',
+          clientMessage: 'Government ID image blurred and corner cropped; unable to verify issuing details.',
+          internalNotes: 'Notify client via email to contact services if appealing.'
+        },
+        complianceAuthHeader
+      );
+      if (rejectRes.status !== 200 || rejectRes.body.submission?.verificationStatus !== 'rejected') {
+        throw new Error(`Reject failed: ${rejectRes.status}`);
       }
     });
 

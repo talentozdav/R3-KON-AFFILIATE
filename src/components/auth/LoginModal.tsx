@@ -40,6 +40,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     if (!isOpen) return;
     const params = new URLSearchParams(window.location.search);
     const isActivateUrl = params.get('mode') === 'activate' || params.get('action') === 'activate';
+    const isKycLink = params.get('section') === 'verification' || params.get('next') === 'verification';
+    if (isKycLink) {
+      try {
+        sessionStorage.setItem('r3_portal_target_tab', 'identity_verification');
+      } catch {
+        // ignore storage errors
+      }
+    }
     if (isActivateUrl) {
       setMode('activate');
       const refParam = params.get('ref');

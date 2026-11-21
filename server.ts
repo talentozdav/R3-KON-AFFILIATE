@@ -10,6 +10,7 @@ import { adminRouter } from './server/routes/admin.js';
 import { referralsRouter } from './server/routes/referrals.js';
 
 import { clientRouter } from './server/routes/client.js';
+import { kycRouter } from './server/routes/kyc.js';
 import { checkDatabaseConnectivity, getSupabaseConfigStatus } from './server/supabase.js';
 
 dotenv.config();
@@ -22,7 +23,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 const isVercel = Boolean(process.env.VERCEL);
 
-app.use(express.json());
+app.use(express.json({ limit: '6mb' }));
 app.use(express.static(path.resolve(__dirname, 'public')));
 app.use(authMiddleware);
 
@@ -53,6 +54,7 @@ app.use('/api/affiliates', affiliatesRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/referrals', referralsRouter);
 app.use('/api/client', clientRouter);
+app.use('/api/kyc', kycRouter);
 
 // JSON 404 handler for any unmapped API endpoint (prevents Vercel HTML error parsing failures)
 app.all('/api/*', (req, res) => {
